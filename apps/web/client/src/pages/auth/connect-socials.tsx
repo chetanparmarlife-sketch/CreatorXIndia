@@ -106,7 +106,7 @@ export default function ConnectSocialsPage() {
             <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
           </div>
           <button
-            onClick={() => navigate("/niches")}
+            onClick={() => navigate("/auth/niches")}
             className="text-sm text-muted-foreground hover:text-foreground"
             data-testid="link-skip"
           >
@@ -209,7 +209,7 @@ export default function ConnectSocialsPage() {
               });
               return;
             }
-            navigate("/niches");
+            navigate("/auth/niches");
           }}
           data-testid="button-continue"
         >

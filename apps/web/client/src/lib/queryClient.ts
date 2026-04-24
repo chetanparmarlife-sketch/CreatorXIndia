@@ -2,98 +2,114 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-// ---------------------------------------------------------------
-// Current user id — held in memory, synced to the URL so refresh works
-// in both preview (sandboxed iframe) and published modes.
-// ---------------------------------------------------------------
+type UnauthorizedBehavior = "returnNull" | "throw";
 
-let currentUserId: string | null = null;
+type AuthBridge = {
+  getAccessToken: () => string | null;
+  getUserId: () => string | null;
+  refreshAccessToken: () => Promise<string | null>;
+  logout: () => Promise<void> | void;
+};
 
-export function readUidFromUrl(): string | null {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("uid");
-  } catch {
-    return null;
-  }
+let authBridge: AuthBridge = {
+  getAccessToken: () => null,
+  getUserId: () => null,
+  refreshAccessToken: async () => null,
+  logout: () => {},
+};
+
+export function setAuthBridge(next: Partial<AuthBridge>) {
+  authBridge = { ...authBridge, ...next };
 }
 
-function writeUidToUrl(uid: string | null) {
-  try {
-    const url = new URL(window.location.href);
-    if (uid) url.searchParams.set("uid", uid);
-    else url.searchParams.delete("uid");
-    window.history.replaceState({}, "", url.toString());
-  } catch {}
-}
+function authHeaders(accessTokenOverride?: string | null): Record<string, string> {
+  const token = accessTokenOverride ?? authBridge.getAccessToken();
+  const userId = authBridge.getUserId();
 
-export function setCurrentUserId(uid: string | null) {
-  currentUserId = uid;
-  writeUidToUrl(uid);
-}
-
-export function getCurrentUserId(): string | null {
-  return currentUserId || readUidFromUrl();
-}
-
-// Initialize from URL at module load
-currentUserId = readUidFromUrl();
-
-function authHeaders(): Record<string, string> {
-  const uid = getCurrentUserId();
-  return uid ? { "X-User-Id": uid } : {};
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (userId) headers["X-User-Id"] = userId;
+  return headers;
 }
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     let message = res.statusText;
     try {
-      const data = await res.clone().json();
+      const data = (await res.clone().json()) as { error?: string; message?: string };
       message = data.error || data.message || message;
     } catch {
       message = (await res.text()) || res.statusText;
     }
-    const err: any = new Error(`${res.status}: ${message}`);
-    err.status = res.status;
-    throw err;
+    throw new Error(`${res.status}: ${message}`);
   }
 }
 
-export async function apiRequest(
+async function performFetch(
   method: string,
   url: string,
-  data?: unknown | undefined,
+  data?: unknown,
+  accessTokenOverride?: string | null,
 ): Promise<Response> {
-  const res = await fetch(`${API_BASE}${url}`, {
+  return fetch(`${API_BASE}${url}`, {
     method,
     headers: {
       ...(data ? { "Content-Type": "application/json" } : {}),
-      ...authHeaders(),
+      ...authHeaders(accessTokenOverride),
     },
     body: data ? JSON.stringify(data) : undefined,
   });
+}
 
+export async function apiRequestWithoutRetry(
+  method: string,
+  url: string,
+  data?: unknown,
+  accessTokenOverride?: string | null,
+): Promise<Response> {
+  const res = await performFetch(method, url, data, accessTokenOverride);
   await throwIfResNotOk(res);
   return res;
 }
 
-type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
-  on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
-    const res = await fetch(`${API_BASE}${queryKey.join("/")}`, {
-      headers: authHeaders(),
-    });
+async function requestWith401Retry(method: string, url: string, data?: unknown): Promise<Response> {
+  const initial = await performFetch(method, url, data);
+  if (initial.status !== 401) return initial;
+
+  const refreshedToken = await authBridge.refreshAccessToken();
+  if (!refreshedToken) {
+    await authBridge.logout();
+    return initial;
+  }
+
+  const retry = await performFetch(method, url, data, refreshedToken);
+  if (retry.status === 401) {
+    await authBridge.logout();
+  }
+  return retry;
+}
+
+export async function apiRequest(method: string, url: string, data?: unknown): Promise<Response> {
+  const res = await requestWith401Retry(method, url, data);
+  await throwIfResNotOk(res);
+  return res;
+}
+
+export function getQueryFn<T>(options: { on401: UnauthorizedBehavior }): QueryFunction<T> {
+  const { on401: unauthorizedBehavior } = options;
+
+  return async ({ queryKey }) => {
+    const path = queryKey.map(String).join("/");
+    const res = await requestWith401Retry("GET", path);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
+      return null as T;
     }
 
     await throwIfResNotOk(res);
-    return await res.json();
+    return (await res.json()) as T;
   };
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {

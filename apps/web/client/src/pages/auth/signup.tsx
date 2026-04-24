@@ -20,7 +20,7 @@ export default function SignupPage() {
     try {
       await signup(form);
       toast({ title: "Account created \u2014 let's link your socials next" });
-      navigate("/connect-socials");
+      navigate("/auth/connect-socials");
     } catch (err: any) {
       toast({ title: "Signup failed", description: err.message, variant: "destructive" });
     } finally {
@@ -99,7 +99,7 @@ export default function SignupPage() {
 
         <p className="text-center text-sm text-muted-foreground mt-auto pt-8">
           Already have an account?{" "}
-          <Link href="/login" className="text-foreground font-semibold hover:text-primary">
+          <Link href="/auth/login" className="text-foreground font-semibold hover:text-primary">
             Log In
           </Link>
         </p>

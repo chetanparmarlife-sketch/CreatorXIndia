@@ -1,19 +1,21 @@
-import { Switch, Route, Router, Redirect, useLocation } from "wouter";
+import type { ReactNode } from "react";
+import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
+import type { UserRole } from "@creatorx/schema";
+import { queryClient } from "./lib/queryClient";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AuthProvider, useAuth } from "@/lib/auth";
+import { Toaster } from "@/components/ui/toaster";
+import { AuthProvider } from "@/lib/auth";
+import { RequireAuth, RequireRole, RoleRedirect } from "@/components/route-guard";
 import NotFound from "@/pages/not-found";
-import { Icon } from "@/components/brand";
 
 // Auth pages
-import OnboardingPage from "@/pages/auth/onboarding";
 import LoginPage from "@/pages/auth/login";
 import SignupPage from "@/pages/auth/signup";
-import ConnectSocialsPage from "@/pages/auth/connect-socials";
+import OnboardingPage from "@/pages/auth/onboarding";
 import NichesPage from "@/pages/auth/niches";
+import ConnectSocialsPage from "@/pages/auth/connect-socials";
 
 // Creator pages
 import HomePage from "@/pages/creator/home";
@@ -37,6 +39,9 @@ import SettingsHelpPage from "@/pages/creator/settings/help";
 import CommunityPage from "@/pages/creator/community";
 import EventDetailsPage from "@/pages/creator/event-details";
 
+// Brand pages
+import BrandDashboardPage from "@/pages/brand/dashboard";
+
 // Admin pages
 import AdminDashboardPage from "@/pages/admin/dashboard";
 import AdminCreatorsPage from "@/pages/admin/creators";
@@ -51,159 +56,201 @@ import AdminHandlesPage from "@/pages/admin/handles";
 import AdminCommunityPage from "@/pages/admin/community";
 import AdminAuditPage from "@/pages/admin/audit";
 
-function LoadingScreen() {
+const ADMIN_ROLES: UserRole[] = ["admin_ops", "admin_support", "admin_finance", "admin_readonly"];
+
+function NotAuthorizedPage() {
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <Icon name="progress_activity" className="animate-spin text-[32px] text-primary" />
+    <div className="min-h-screen bg-background flex items-center justify-center p-6" data-testid="page-not-authorized">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center">
+        <h1 className="text-2xl font-bold mb-2">You don't have access to this page.</h1>
+      </div>
     </div>
   );
 }
 
-function RequireAuth({ children, role }: { children: React.ReactNode; role?: "creator" | "admin" }) {
-  const { user, loading } = useAuth();
-  const [location] = useLocation();
-
-  if (loading) return <LoadingScreen />;
-
-  if (!user) {
-    // Landing / onboarding for unauthenticated users — keep them on these pages
-    if (["/", "/login", "/signup", "/onboarding"].includes(location)) {
-      return <>{children}</>;
-    }
-    return <Redirect to="/login" />;
-  }
-
-  if (role && user.role !== role) {
-    // Admin trying to visit creator app or vice versa
-    return <Redirect to={user.role === "admin" ? "/admin" : "/home"} />;
-  }
-
-  return <>{children}</>;
+function CreatorRoute({ children }: { children: ReactNode }) {
+  return (
+    <RequireAuth>
+      <RequireRole roles={["creator"]}>{children}</RequireRole>
+    </RequireAuth>
+  );
 }
 
-function RoleLanding() {
-  const { user, loading } = useAuth();
-  if (loading) return <LoadingScreen />;
-  if (!user) return <OnboardingPage />;
-  return <Redirect to={user.role === "admin" ? "/admin" : "/home"} />;
+function BrandRoute({ children }: { children: ReactNode }) {
+  return (
+    <RequireAuth>
+      <RequireRole roles={["brand"]}>{children}</RequireRole>
+    </RequireAuth>
+  );
+}
+
+function AdminRoute({ children }: { children: ReactNode }) {
+  return (
+    <RequireAuth>
+      <RequireRole roles={ADMIN_ROLES}>{children}</RequireRole>
+    </RequireAuth>
+  );
+}
+
+function CampaignAlias({ params }: { params: { id: string } }) {
+  return <Redirect to={`/creator/campaigns/${params.id}`} />;
+}
+
+function ChatAlias({ params }: { params: { id: string } }) {
+  return <Redirect to={`/creator/chat/${params.id}`} />;
+}
+
+function CommunityAlias({ params }: { params: { id: string } }) {
+  return <Redirect to={`/creator/community/${params.id}`} />;
+}
+
+function SettingsAlias({ params }: { params: { section: string } }) {
+  return <Redirect to={`/creator/settings/${params.section}`} />;
 }
 
 function AppRouter() {
   return (
     <Switch>
-      {/* Landing */}
-      <Route path="/" component={RoleLanding} />
+      <Route path="/auth/login" component={LoginPage} />
+      <Route path="/auth/signup" component={SignupPage} />
+      <Route path="/auth/onboarding" component={OnboardingPage} />
+      <Route path="/auth/niches" component={NichesPage} />
+      <Route path="/auth/connect-socials" component={ConnectSocialsPage} />
 
-      {/* Auth */}
-      <Route path="/onboarding" component={OnboardingPage} />
-      <Route path="/login" component={LoginPage} />
-      <Route path="/signup" component={SignupPage} />
-      <Route path="/connect-socials">
-        <RequireAuth><ConnectSocialsPage /></RequireAuth>
-      </Route>
-      <Route path="/niches">
-        <RequireAuth><NichesPage /></RequireAuth>
-      </Route>
+      <Route path="/" component={RoleRedirect} />
 
-      {/* Creator app */}
-      <Route path="/home">
-        <RequireAuth role="creator"><HomePage /></RequireAuth>
+      <Route path="/creator/home">
+        <CreatorRoute><HomePage /></CreatorRoute>
       </Route>
-      <Route path="/discover">
-        <RequireAuth role="creator"><DiscoverPage /></RequireAuth>
+      <Route path="/creator/discover">
+        <CreatorRoute><DiscoverPage /></CreatorRoute>
       </Route>
-      <Route path="/campaigns">
-        <RequireAuth role="creator"><MyCampaignsPage /></RequireAuth>
+      <Route path="/creator/campaigns">
+        <CreatorRoute><MyCampaignsPage /></CreatorRoute>
       </Route>
-      <Route path="/campaigns/:id">
-        <RequireAuth role="creator"><CampaignDetailsPage /></RequireAuth>
+      <Route path="/creator/campaigns/:id">
+        <CreatorRoute><CampaignDetailsPage /></CreatorRoute>
       </Route>
-      <Route path="/inbox">
-        <RequireAuth role="creator"><InboxPage /></RequireAuth>
+      <Route path="/creator/inbox">
+        <CreatorRoute><InboxPage /></CreatorRoute>
       </Route>
-      <Route path="/chat/:id">
-        <RequireAuth role="creator"><ChatThreadPage /></RequireAuth>
+      <Route path="/creator/chat/:id">
+        <CreatorRoute><ChatThreadPage /></CreatorRoute>
       </Route>
-      <Route path="/new-message">
-        <RequireAuth role="creator"><NewMessagePage /></RequireAuth>
+      <Route path="/creator/new-message">
+        <CreatorRoute><NewMessagePage /></CreatorRoute>
       </Route>
-      <Route path="/notifications">
-        <RequireAuth role="creator"><NotificationsPage /></RequireAuth>
+      <Route path="/creator/notifications">
+        <CreatorRoute><NotificationsPage /></CreatorRoute>
       </Route>
-      <Route path="/earnings">
-        <RequireAuth role="creator"><EarningsPage /></RequireAuth>
+      <Route path="/creator/earnings">
+        <CreatorRoute><EarningsPage /></CreatorRoute>
       </Route>
-      <Route path="/withdraw">
-        <RequireAuth role="creator"><WithdrawPage /></RequireAuth>
+      <Route path="/creator/withdraw">
+        <CreatorRoute><WithdrawPage /></CreatorRoute>
       </Route>
-      <Route path="/profile">
-        <RequireAuth role="creator"><ProfilePage /></RequireAuth>
+      <Route path="/creator/profile">
+        <CreatorRoute><ProfilePage /></CreatorRoute>
       </Route>
-      <Route path="/settings">
-        <RequireAuth role="creator"><SettingsPage /></RequireAuth>
+      <Route path="/creator/settings">
+        <CreatorRoute><SettingsPage /></CreatorRoute>
       </Route>
-      <Route path="/settings/profile">
-        <RequireAuth role="creator"><SettingsProfilePage /></RequireAuth>
+      <Route path="/creator/settings/profile">
+        <CreatorRoute><SettingsProfilePage /></CreatorRoute>
       </Route>
-      <Route path="/settings/kyc">
-        <RequireAuth role="creator"><SettingsKycPage /></RequireAuth>
+      <Route path="/creator/settings/kyc">
+        <CreatorRoute><SettingsKycPage /></CreatorRoute>
       </Route>
-      <Route path="/settings/payouts">
-        <RequireAuth role="creator"><SettingsPayoutsPage /></RequireAuth>
+      <Route path="/creator/settings/payouts">
+        <CreatorRoute><SettingsPayoutsPage /></CreatorRoute>
       </Route>
-      <Route path="/settings/notifications">
-        <RequireAuth role="creator"><SettingsNotificationsPage /></RequireAuth>
+      <Route path="/creator/settings/notifications">
+        <CreatorRoute><SettingsNotificationsPage /></CreatorRoute>
       </Route>
-      <Route path="/settings/privacy">
-        <RequireAuth role="creator"><SettingsPrivacyPage /></RequireAuth>
+      <Route path="/creator/settings/privacy">
+        <CreatorRoute><SettingsPrivacyPage /></CreatorRoute>
       </Route>
-      <Route path="/settings/help">
-        <RequireAuth role="creator"><SettingsHelpPage /></RequireAuth>
+      <Route path="/creator/settings/help">
+        <CreatorRoute><SettingsHelpPage /></CreatorRoute>
       </Route>
-      <Route path="/community">
-        <RequireAuth role="creator"><CommunityPage /></RequireAuth>
+      <Route path="/creator/community">
+        <CreatorRoute><CommunityPage /></CreatorRoute>
       </Route>
-      <Route path="/community/:id">
-        <RequireAuth role="creator"><EventDetailsPage /></RequireAuth>
+      <Route path="/creator/community/:id">
+        <CreatorRoute><EventDetailsPage /></CreatorRoute>
       </Route>
 
-      {/* Admin console */}
-      <Route path="/admin">
-        <RequireAuth role="admin"><AdminDashboardPage /></RequireAuth>
+      <Route path="/brand/dashboard">
+        <BrandRoute><BrandDashboardPage /></BrandRoute>
+      </Route>
+      <Route path="/brand">
+        <Redirect to="/brand/dashboard" />
+      </Route>
+
+      <Route path="/admin/dashboard">
+        <AdminRoute><AdminDashboardPage /></AdminRoute>
       </Route>
       <Route path="/admin/creators">
-        <RequireAuth role="admin"><AdminCreatorsPage /></RequireAuth>
+        <AdminRoute><AdminCreatorsPage /></AdminRoute>
       </Route>
       <Route path="/admin/creators/:id">
-        <RequireAuth role="admin"><AdminCreatorDetailPage /></RequireAuth>
+        <AdminRoute><AdminCreatorDetailPage /></AdminRoute>
       </Route>
       <Route path="/admin/brands">
-        <RequireAuth role="admin"><AdminBrandsPage /></RequireAuth>
+        <AdminRoute><AdminBrandsPage /></AdminRoute>
       </Route>
       <Route path="/admin/campaigns">
-        <RequireAuth role="admin"><AdminCampaignsPage /></RequireAuth>
+        <AdminRoute><AdminCampaignsPage /></AdminRoute>
       </Route>
       <Route path="/admin/applications">
-        <RequireAuth role="admin"><AdminApplicationsPage /></RequireAuth>
+        <AdminRoute><AdminApplicationsPage /></AdminRoute>
       </Route>
       <Route path="/admin/deliverables">
-        <RequireAuth role="admin"><AdminDeliverablesPage /></RequireAuth>
+        <AdminRoute><AdminDeliverablesPage /></AdminRoute>
       </Route>
       <Route path="/admin/payouts">
-        <RequireAuth role="admin"><AdminPayoutsPage /></RequireAuth>
+        <AdminRoute><AdminPayoutsPage /></AdminRoute>
       </Route>
       <Route path="/admin/kyc">
-        <RequireAuth role="admin"><AdminKycPage /></RequireAuth>
+        <AdminRoute><AdminKycPage /></AdminRoute>
       </Route>
       <Route path="/admin/handles">
-        <RequireAuth role="admin"><AdminHandlesPage /></RequireAuth>
+        <AdminRoute><AdminHandlesPage /></AdminRoute>
       </Route>
       <Route path="/admin/community">
-        <RequireAuth role="admin"><AdminCommunityPage /></RequireAuth>
+        <AdminRoute><AdminCommunityPage /></AdminRoute>
       </Route>
       <Route path="/admin/audit">
-        <RequireAuth role="admin"><AdminAuditPage /></RequireAuth>
+        <AdminRoute><AdminAuditPage /></AdminRoute>
       </Route>
+      <Route path="/admin">
+        <Redirect to="/admin/dashboard" />
+      </Route>
+
+      <Route path="/not-authorized" component={NotAuthorizedPage} />
+
+      {/* Legacy aliases */}
+      <Route path="/login"><Redirect to="/auth/login" /></Route>
+      <Route path="/signup"><Redirect to="/auth/signup" /></Route>
+      <Route path="/onboarding"><Redirect to="/auth/onboarding" /></Route>
+      <Route path="/niches"><Redirect to="/auth/niches" /></Route>
+      <Route path="/connect-socials"><Redirect to="/auth/connect-socials" /></Route>
+
+      <Route path="/home"><Redirect to="/creator/home" /></Route>
+      <Route path="/discover"><Redirect to="/creator/discover" /></Route>
+      <Route path="/campaigns" component={() => <Redirect to="/creator/campaigns" />} />
+      <Route path="/campaigns/:id" component={CampaignAlias} />
+      <Route path="/inbox"><Redirect to="/creator/inbox" /></Route>
+      <Route path="/chat/:id" component={ChatAlias} />
+      <Route path="/new-message"><Redirect to="/creator/new-message" /></Route>
+      <Route path="/notifications"><Redirect to="/creator/notifications" /></Route>
+      <Route path="/earnings"><Redirect to="/creator/earnings" /></Route>
+      <Route path="/withdraw"><Redirect to="/creator/withdraw" /></Route>
+      <Route path="/profile"><Redirect to="/creator/profile" /></Route>
+      <Route path="/settings"><Redirect to="/creator/settings" /></Route>
+      <Route path="/settings/:section" component={SettingsAlias} />
+      <Route path="/community"><Redirect to="/creator/community" /></Route>
+      <Route path="/community/:id" component={CommunityAlias} />
 
       <Route component={NotFound} />
     </Switch>

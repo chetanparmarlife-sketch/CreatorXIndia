@@ -44,7 +44,7 @@ export default function OnboardingPage() {
             </span>
           </div>
           <button
-            onClick={() => navigate("/login")}
+            onClick={() => navigate("/auth/login")}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             data-testid="link-skip"
           >
@@ -92,7 +92,7 @@ export default function OnboardingPage() {
           <Button
             size="lg"
             className="w-full h-14 text-base font-semibold rounded-full glow-primary"
-            onClick={() => (last ? navigate("/signup") : setIdx(idx + 1))}
+            onClick={() => (last ? navigate("/auth/signup") : setIdx(idx + 1))}
             data-testid="button-next"
           >
             {last ? "Get Started" : "Next"}
@@ -101,7 +101,7 @@ export default function OnboardingPage() {
           <p className="text-center text-sm text-muted-foreground">
             Already have an account?{" "}
             <button
-              onClick={() => navigate("/login")}
+              onClick={() => navigate("/auth/login")}
               className="text-foreground font-semibold hover:text-primary transition-colors"
               data-testid="link-login"
             >
