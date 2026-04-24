@@ -1,10 +1,14 @@
 import { defineConfig } from "drizzle-kit";
 
+const connectionString = process.env.DATABASE_URL ?? "";
+
 export default defineConfig({
-  out: "./migrations",
-  schema: "./packages/schema/src/schema.ts",
-  dialect: "sqlite",
+  out: "./supabase/migrations",
+  schema: "./packages/schema/src/index.ts",
+  dialect: "postgresql",
+  driver: "postgres-js",
   dbCredentials: {
-    url: "./data.db",
-  },
+    url: connectionString,
+    connectionString,
+  } as { url: string; connectionString: string },
 });

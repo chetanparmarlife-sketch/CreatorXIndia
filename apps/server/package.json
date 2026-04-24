@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "NODE_ENV=development tsx index.ts",
+    "build": "tsc --noEmit",
     "start": "NODE_ENV=production node dist/index.cjs"
   },
   "dependencies": {
-    "@creatorx/schema": "workspace:*"
+    "@creatorx/schema": "workspace:*",
+    "drizzle-kit": "^0.31.8"
   }
 }

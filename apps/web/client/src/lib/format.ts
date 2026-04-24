@@ -1,4 +1,4 @@
-import { formatINR } from "@creatorx/schema";
+import { formatINR } from "@creatorx/schema/india";
 
 /** Format paise → "₹1,20,000" (Indian lakh/crore comma style). Kept as fmtMoney for backwards compatibility across the app. */
 export function fmtMoney(paise: number, opts?: { compact?: boolean; sign?: boolean }) {

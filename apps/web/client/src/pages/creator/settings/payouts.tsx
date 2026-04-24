@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/brand";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { isValidUPI, isValidIFSC } from "@creatorx/schema";
+import { isValidUPI, isValidIFSC } from "@creatorx/schema/india";
 
 type PayoutPayload = {
   upi_id: string | null;

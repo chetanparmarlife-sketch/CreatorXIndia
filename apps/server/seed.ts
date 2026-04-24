@@ -2,12 +2,29 @@ import type {
   Profile, SocialAccount, Brand, Campaign, Application, Deliverable,
   MessageThread, Message, Transaction, Withdrawal, CommunityItem, Notification, AuditLog,
 } from "@creatorx/schema";
-import { computeTier } from "@creatorx/schema";
+import {
+  audit_log as auditLogTable,
+  applications as applicationsTable,
+  brands as brandsTable,
+  campaigns as campaignsTable,
+  community as communityTable,
+  computeTier,
+  db,
+  deliverables as deliverablesTable,
+  message_threads as messageThreadsTable,
+  messages as messagesTable,
+  notifications as notificationsTable,
+  profiles as profilesTable,
+  social_accounts as socialAccountsTable,
+  transactions as transactionsTable,
+  withdrawals as withdrawalsTable,
+} from "@creatorx/schema";
+import { sql } from "drizzle-orm";
 
 const img = (id: string, w = 400, h = 400) =>
   `https://images.unsplash.com/${id}?w=${w}&h=${h}&fit=crop&auto=format&q=80`;
 
-export function seed() {
+function buildSeedData() {
   const daysAgo = (d: number) => {
     const dt = new Date();
     dt.setDate(dt.getDate() - d);
@@ -688,4 +705,36 @@ export function seed() {
     profiles, social_accounts, brands, campaigns, applications, deliverables,
     message_threads, messages, transactions, withdrawals, community, notifications, audit_log,
   };
+}
+
+export async function seed(): Promise<void> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(profilesTable);
+
+  if (count > 0) return;
+
+  const data = buildSeedData();
+
+  await db.insert(profilesTable).values(data.profiles);
+  await db.insert(brandsTable).values(data.brands);
+  await db.insert(campaignsTable).values(data.campaigns);
+  await db.insert(socialAccountsTable).values(data.social_accounts);
+  await db.insert(applicationsTable).values(data.applications);
+  await db.insert(deliverablesTable).values(data.deliverables);
+  await db.insert(messageThreadsTable).values(data.message_threads);
+  await db.insert(messagesTable).values(data.messages);
+  await db.insert(transactionsTable).values(data.transactions);
+  await db.insert(withdrawalsTable).values(data.withdrawals);
+  await db.insert(communityTable).values(data.community);
+  await db.insert(notificationsTable).values(data.notifications);
+  await db.insert(auditLogTable).values(
+    data.audit_log.map((row) => ({
+      ...row,
+      actor_user_id: row.admin_id,
+      target_type: row.entity_kind,
+      target_id: row.entity_id,
+      diff_json: null,
+    })),
+  );
 }

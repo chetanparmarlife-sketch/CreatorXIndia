@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import { isValidPAN, isValidGSTIN, isValidAadhaarLast4 } from "@creatorx/schema";
+import { isValidPAN, isValidGSTIN, isValidAadhaarLast4 } from "@creatorx/schema/india";
 
 type KycPayload = {
   kyc_status: string;
