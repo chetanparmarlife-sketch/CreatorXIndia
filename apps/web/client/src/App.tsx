@@ -43,6 +43,8 @@ import EventDetailsPage from "@/pages/creator/event-details";
 import BrandDashboardPage from "@/pages/brand/dashboard";
 import BrandOnboardingPage from "@/pages/brand/onboarding";
 import NewCampaignPage from "@/pages/brand/campaigns/new";
+import CampaignListPage from "@/pages/brand/campaigns/index";
+import CampaignDetailPage from "@/pages/brand/campaigns/[id]";
 
 // Admin pages
 import AdminDashboardPage from "@/pages/admin/dashboard";
@@ -192,7 +194,10 @@ function AppRouter() {
         <BrandRoute><NewCampaignPage /></BrandRoute>
       </Route>
       <Route path="/brand/campaigns">
-        <Redirect to="/brand/dashboard" />
+        <BrandRoute><CampaignListPage /></BrandRoute>
+      </Route>
+      <Route path="/brand/campaigns/:id">
+        <BrandRoute><CampaignDetailPage /></BrandRoute>
       </Route>
       <Route path="/brand">
         <Redirect to="/brand/dashboard" />

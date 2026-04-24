@@ -4,9 +4,10 @@ import {
   profiles, socials, brands, campaigns, applications, deliverables,
   messages, transactions, withdrawals, community, notifications, audit, analytics,
   eligibility, resetDb, upsertPushToken, getBrandProfile, updateBrandProfile,
-  getBrandDashboardStats, getBrandActivity, createCampaign,
+  getBrandDashboardStats, getBrandActivity, createCampaign, getBrandCampaigns,
+  getCampaign, getCampaignStats, updateCampaignStatus,
 } from "./storage";
-import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES, type UserRole } from "@creatorx/schema";
+import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES, type UserRole, type Campaign } from "@creatorx/schema";
 import { z } from "zod";
 import {
   AuthError,
@@ -61,6 +62,18 @@ const campaignCreateSchema = z.object({
     z.string().trim().url("brief_url must be a valid URL").optional(),
   ),
 });
+
+const brandCampaignStatusSchema = z.enum(["draft", "active", "paused", "completed"]);
+const campaignStatusUpdateSchema = z.object({
+  status: z.enum(["paused", "active"]),
+});
+
+function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
+  if (!status) return undefined;
+  if (status === "active") return "open";
+  if (status === "paused") return "closed";
+  return status;
+}
 
 function getUserId(req: Request): string | null {
   if (req.user?.id) return req.user.id;
@@ -1024,6 +1037,112 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       max_creators: parsed.data.max_creators,
       application_deadline: parsed.data.application_deadline,
     });
+
+    return res.json({ campaign });
+  });
+
+  app.get("/api/brand/campaigns", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const statusParam = req.query.status;
+    if (statusParam !== undefined && typeof statusParam !== "string") {
+      return res.status(400).json({ error: "status must be a string" });
+    }
+
+    const parsedStatus = statusParam === undefined ? undefined : brandCampaignStatusSchema.safeParse(statusParam);
+    if (parsedStatus && !parsedStatus.success) {
+      return res.status(400).json({ error: "Invalid status filter" });
+    }
+
+    const campaigns = await getBrandCampaigns(user.id, mapBrandFilterStatus(parsedStatus?.data));
+    return res.json({ campaigns });
+  });
+
+  app.get("/api/brand/campaigns/:id", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
+
+    const campaign = await getCampaign(user.id, campaignId);
+    if (!campaign) {
+      const existing = await campaigns.byId(campaignId);
+      if (existing) return res.status(403).json({ error: "Forbidden" });
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const allApplications = await applications.list({ campaign_id: campaign.id });
+    const sortedApplications = [...allApplications].sort((a, b) => (a.applied_at < b.applied_at ? 1 : -1)).slice(0, 5);
+
+    const applicants = await Promise.all(
+      sortedApplications.map(async (application) => {
+        const creator = await profiles.byId(application.creator_id);
+        return {
+          applicationId: application.id,
+          status: application.status,
+          creator: {
+            id: creator?.id ?? application.creator_id,
+            avatar_url: creator?.avatar_url ?? null,
+            display_name: creator?.full_name || creator?.handle || "Creator",
+            follower_count: creator?.total_reach ?? 0,
+          },
+        };
+      }),
+    );
+
+    return res.json({ campaign, applicants });
+  });
+
+  app.get("/api/brand/campaigns/:id/stats", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
+
+    const stats = await getCampaignStats(user.id, campaignId);
+    if (!stats) {
+      const existing = await campaigns.byId(campaignId);
+      if (existing) return res.status(403).json({ error: "Forbidden" });
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    return res.json(stats);
+  });
+
+  app.patch("/api/brand/campaigns/:id/status", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
+
+    const parsed = campaignStatusUpdateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const current = await getCampaign(user.id, campaignId);
+    if (!current) {
+      const existing = await campaigns.byId(campaignId);
+      if (existing) return res.status(403).json({ error: "Forbidden" });
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    let nextStatus: Campaign["status"] | null = null;
+    if (current.status === "open" && parsed.data.status === "paused") {
+      nextStatus = "closed";
+    } else if (current.status === "closed" && parsed.data.status === "active") {
+      nextStatus = "open";
+    }
+
+    if (!nextStatus) {
+      return res.status(400).json({ error: "Invalid status transition" });
+    }
+
+    const campaign = await updateCampaignStatus(user.id, campaignId, nextStatus);
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
 
     return res.json({ campaign });
   });

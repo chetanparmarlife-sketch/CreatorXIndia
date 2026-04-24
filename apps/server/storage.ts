@@ -151,6 +151,15 @@ export interface IStorage {
     approvedDeliverables: number;
   }>;
   getBrandActivity(userId: string): Promise<AuditLog[]>;
+  getBrandCampaigns(userId: string, status?: Campaign["status"]): Promise<Array<Campaign & { applicant_count: number }>>;
+  getCampaign(userId: string, campaignId: string): Promise<Campaign | null>;
+  getCampaignStats(userId: string, campaignId: string): Promise<{
+    totalApplications: number;
+    pendingReview: number;
+    approved: number;
+    rejected: number;
+  } | null>;
+  updateCampaignStatus(userId: string, campaignId: string, status: Campaign["status"]): Promise<Campaign | null>;
   createCampaign(
     userId: string,
     data: {
@@ -434,6 +443,104 @@ export async function createCampaign(
   });
 
   return row;
+}
+
+export async function getBrandCampaigns(
+  userId: string,
+  status?: Campaign["status"],
+): Promise<Array<Campaign & { applicant_count: number }>> {
+  await ensureSeeded();
+
+  let rows = await db.select().from(campaignsTable).where(eq(campaignsTable.brand_id, userId));
+  if (status) {
+    rows = rows.filter((campaign) => campaign.status === status);
+  }
+
+  const campaigns = sortDescBy(rows);
+  if (campaigns.length === 0) return [];
+
+  const campaignIds = campaigns.map((campaign) => campaign.id);
+  const applicationRows = await db
+    .select({ campaign_id: applicationsTable.campaign_id })
+    .from(applicationsTable)
+    .where(inArray(applicationsTable.campaign_id, campaignIds));
+
+  const counts = new Map<string, number>();
+  for (const row of applicationRows) {
+    counts.set(row.campaign_id, (counts.get(row.campaign_id) ?? 0) + 1);
+  }
+
+  return campaigns.map((campaign) => ({
+    ...campaign,
+    applicant_count: counts.get(campaign.id) ?? 0,
+  }));
+}
+
+export async function getCampaign(userId: string, campaignId: string): Promise<Campaign | null> {
+  await ensureSeeded();
+  const [row] = await db
+    .select()
+    .from(campaignsTable)
+    .where(and(eq(campaignsTable.id, campaignId), eq(campaignsTable.brand_id, userId)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getCampaignStats(
+  userId: string,
+  campaignId: string,
+): Promise<{
+  totalApplications: number;
+  pendingReview: number;
+  approved: number;
+  rejected: number;
+} | null> {
+  await ensureSeeded();
+
+  const campaign = await getCampaign(userId, campaignId);
+  if (!campaign) return null;
+
+  const rows = await db
+    .select({ status: applicationsTable.status })
+    .from(applicationsTable)
+    .where(eq(applicationsTable.campaign_id, campaignId));
+
+  const totalApplications = rows.length;
+  const pendingReview = rows.filter((application) => application.status === "pending").length;
+  const approved = rows.filter((application) => application.status === "accepted").length;
+  const rejected = rows.filter((application) => application.status === "rejected").length;
+
+  return {
+    totalApplications,
+    pendingReview,
+    approved,
+    rejected,
+  };
+}
+
+export async function updateCampaignStatus(
+  userId: string,
+  campaignId: string,
+  status: Campaign["status"],
+): Promise<Campaign | null> {
+  await ensureSeeded();
+  const current = await getCampaign(userId, campaignId);
+  if (!current) return null;
+
+  const [updated] = await db
+    .update(campaignsTable)
+    .set({ status })
+    .where(and(eq(campaignsTable.id, campaignId), eq(campaignsTable.brand_id, userId)))
+    .returning();
+
+  if (!updated) return null;
+
+  await writeAudit(userId, "update_brand_campaign_status", "campaign", campaignId, {
+    from: current.status,
+    to: status,
+  });
+
+  return updated;
 }
 
 export const profiles = {
