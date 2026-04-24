@@ -133,6 +133,38 @@ function sortAscBy<T extends { created_at: string }>(rows: T[]): T[] {
 
 export interface IStorage {
   upsertPushToken(userId: string, token: string, platform: PushPlatform): Promise<void>;
+  getBrandProfile(userId: string): Promise<Brand>;
+  updateBrandProfile(
+    userId: string,
+    data: {
+      companyName: string;
+      industry: string;
+      websiteUrl: string;
+      gstin?: string;
+      logoUrl?: string;
+    },
+  ): Promise<Brand>;
+  getBrandDashboardStats(userId: string): Promise<{
+    activeCampaigns: number;
+    totalSpentPaise: number;
+    pendingApplications: number;
+    approvedDeliverables: number;
+  }>;
+  getBrandActivity(userId: string): Promise<AuditLog[]>;
+  createCampaign(
+    userId: string,
+    data: {
+      title: string;
+      description: string;
+      niche: string;
+      platforms: Campaign["platforms"];
+      deliverable_type: "post" | "reel" | "story" | "video";
+      budget_paise: number;
+      max_creators: number;
+      application_deadline: string;
+      brief_url?: string;
+    },
+  ): Promise<Campaign>;
 }
 
 export async function resetDb(): Promise<void> {
@@ -175,6 +207,233 @@ export async function upsertPushToken(userId: string, token: string, platform: P
 
   await db.insert(pushTokensTable).values(row);
   await writeAudit(userId, "create_push_token", "push_token", row.id, { platform });
+}
+
+export async function getBrandProfile(userId: string): Promise<Brand> {
+  await ensureSeeded();
+
+  const [existing] = await db.select().from(brandsTable).where(eq(brandsTable.id, userId)).limit(1);
+  if (existing) return existing;
+
+  const profile = await profiles.byId(userId);
+  const row: Brand = {
+    id: userId,
+    name: profile?.full_name ? `${profile.full_name} Brand` : "My Brand",
+    logo_url: null,
+    verified: false,
+    website: null,
+    industry: "",
+    description: null,
+    contact_email: profile?.email ?? null,
+    created_at: now(),
+  };
+
+  await db.insert(brandsTable).values(row);
+  await writeAudit(userId, "create_brand_profile", "brand", userId, { created: true });
+  return row;
+}
+
+export async function updateBrandProfile(
+  userId: string,
+  data: {
+    companyName: string;
+    industry: string;
+    websiteUrl: string;
+    gstin?: string;
+    logoUrl?: string;
+  },
+): Promise<Brand> {
+  await ensureSeeded();
+
+  const current = await getBrandProfile(userId);
+  const [updated] = await db
+    .update(brandsTable)
+    .set({
+      name: data.companyName.trim(),
+      industry: data.industry.trim(),
+      website: data.websiteUrl.trim(),
+      logo_url: data.logoUrl?.trim() || current.logo_url,
+    })
+    .where(eq(brandsTable.id, userId))
+    .returning();
+
+  if (data.gstin) {
+    await db
+      .update(profilesTable)
+      .set({ gstin: data.gstin.toUpperCase() })
+      .where(eq(profilesTable.id, userId));
+  }
+
+  await writeAudit(userId, "update_brand_profile", "brand", userId, {
+    companyName: data.companyName,
+    industry: data.industry,
+    websiteUrl: data.websiteUrl,
+    gstin: data.gstin,
+    logoUrl: data.logoUrl,
+  });
+
+  return updated ?? current;
+}
+
+export async function getBrandDashboardStats(userId: string): Promise<{
+  activeCampaigns: number;
+  totalSpentPaise: number;
+  pendingApplications: number;
+  approvedDeliverables: number;
+}> {
+  await ensureSeeded();
+
+  const brandCampaigns = await db
+    .select({ id: campaignsTable.id, status: campaignsTable.status })
+    .from(campaignsTable)
+    .where(eq(campaignsTable.brand_id, userId));
+
+  const campaignIds = brandCampaigns.map((campaign) => campaign.id);
+  const activeCampaigns = brandCampaigns.filter((campaign) => campaign.status === "open").length;
+
+  if (campaignIds.length === 0) {
+    return {
+      activeCampaigns,
+      totalSpentPaise: 0,
+      pendingApplications: 0,
+      approvedDeliverables: 0,
+    };
+  }
+
+  const [brandApplications, brandDeliverables, brandTransactions] = await Promise.all([
+    db
+      .select({ status: applicationsTable.status })
+      .from(applicationsTable)
+      .where(inArray(applicationsTable.campaign_id, campaignIds)),
+    db
+      .select({ status: deliverablesTable.status })
+      .from(deliverablesTable)
+      .where(inArray(deliverablesTable.campaign_id, campaignIds)),
+    db
+      .select({
+        amount_cents: transactionsTable.amount_cents,
+        kind: transactionsTable.kind,
+        status: transactionsTable.status,
+      })
+      .from(transactionsTable)
+      .where(inArray(transactionsTable.reference_id, campaignIds)),
+  ]);
+
+  const pendingApplications = brandApplications.filter((application) => application.status === "pending").length;
+  const approvedDeliverables = brandDeliverables.filter((deliverable) => deliverable.status === "approved").length;
+  const totalSpentPaise = brandTransactions
+    .filter((transaction) => transaction.kind === "earning" && transaction.status === "completed")
+    .reduce((sum, transaction) => sum + Math.abs(transaction.amount_cents), 0);
+
+  return {
+    activeCampaigns,
+    totalSpentPaise,
+    pendingApplications,
+    approvedDeliverables,
+  };
+}
+
+export async function getBrandActivity(userId: string): Promise<AuditLog[]> {
+  await ensureSeeded();
+
+  const [brandCampaigns, allAuditRows] = await Promise.all([
+    db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.brand_id, userId)),
+    db.select().from(auditLogTable),
+  ]);
+
+  const campaignIds = new Set(brandCampaigns.map((campaign) => campaign.id));
+
+  const rows = allAuditRows.filter((entry) => {
+    if (entry.actor_user_id === userId) return true;
+    if (entry.target_type === "brand" && entry.target_id === userId) return true;
+    if (entry.entity_kind === "brand" && entry.entity_id === userId) return true;
+    if (entry.target_type === "campaign" && campaignIds.has(entry.target_id)) return true;
+    if (entry.entity_kind === "campaign" && campaignIds.has(entry.entity_id)) return true;
+    return false;
+  });
+
+  return sortDescBy(rows).slice(0, 10);
+}
+
+export async function createCampaign(
+  userId: string,
+  data: {
+    title: string;
+    description: string;
+    niche: string;
+    platforms: Campaign["platforms"];
+    deliverable_type: "post" | "reel" | "story" | "video";
+    budget_paise: number;
+    max_creators: number;
+    application_deadline: string;
+    brief_url?: string;
+  },
+): Promise<Campaign> {
+  await ensureSeeded();
+  await getBrandProfile(userId);
+
+  const deadlineDate = new Date(`${data.application_deadline}T23:59:59.000Z`);
+  const draftDeadlineDate = new Date(deadlineDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const liveDate = new Date(deadlineDate.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+  const perCreatorBudget = Math.max(1, Math.floor(data.budget_paise / data.max_creators));
+  const deliverableKind: Record<"post" | "reel" | "story" | "video", string> = {
+    post: "Post",
+    reel: "Reel",
+    story: "Story",
+    video: "Video",
+  };
+
+  const row: Campaign = {
+    id: newId(),
+    brand_id: userId,
+    title: data.title.trim(),
+    cover_image_url: null,
+    description: data.description.trim(),
+    category: data.niche,
+    tags: [],
+    deliverables: [
+      {
+        kind: deliverableKind[data.deliverable_type],
+        qty: 1,
+        spec: data.brief_url ? `See brief: ${data.brief_url}` : "Refer to campaign brief",
+      },
+    ],
+    platforms: data.platforms,
+    base_earning_cents: perCreatorBudget,
+    commission_pct: 0,
+    product_bonus: false,
+    product_bonus_cents: 0,
+    required_niches: [data.niche],
+    min_followers: 0,
+    max_followers: 0,
+    allowed_tiers: [],
+    preferred_cities: [],
+    preferred_languages: [],
+    min_engagement_rate: 0,
+    requires_kyc: false,
+    slots_total: data.max_creators,
+    slots_filled: 0,
+    apply_deadline: deadlineDate.toISOString(),
+    draft_deadline: draftDeadlineDate.toISOString(),
+    live_date: liveDate.toISOString(),
+    status: "draft",
+    featured: false,
+    high_ticket: false,
+    dos: [],
+    donts: [],
+    created_at: now(),
+  };
+
+  await db.insert(campaignsTable).values(row);
+  await writeAudit(userId, "create_brand_campaign", "campaign", row.id, {
+    title: row.title,
+    budget_paise: data.budget_paise,
+    max_creators: data.max_creators,
+    application_deadline: data.application_deadline,
+  });
+
+  return row;
 }
 
 export const profiles = {

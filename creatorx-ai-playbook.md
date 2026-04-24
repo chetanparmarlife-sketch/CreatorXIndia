@@ -7,3 +7,4 @@
 | S03 | 1.2 | JWT Auth + OTP | 1 day | done |
 | S04 | 1.3-1.5 | Uploads, Push Tokens, Deploy Config | 1 day | done |
 | S05 | 2 | Strip Creator + Role Routing | 1 day | done |
+| S06 | 3.1-3.3 | Brand Signup, Dashboard, Campaign Create | 1 day | done |

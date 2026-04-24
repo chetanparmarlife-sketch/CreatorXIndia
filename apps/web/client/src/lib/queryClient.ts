@@ -51,7 +51,8 @@ async function performFetch(
   data?: unknown,
   accessTokenOverride?: string | null,
 ): Promise<Response> {
-  return fetch(`${API_BASE}${url}`, {
+  const requestUrl = /^https?:\/\//.test(url) ? url : `${API_BASE}${url}`;
+  return fetch(requestUrl, {
     method,
     headers: {
       ...(data ? { "Content-Type": "application/json" } : {}),
@@ -59,6 +60,17 @@ async function performFetch(
     },
     body: data ? JSON.stringify(data) : undefined,
   });
+}
+
+export async function uploadToPresignedUrl(uploadUrl: string, file: File, contentType: string): Promise<void> {
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType || "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) {
+    throw new Error(`Upload failed: ${res.status}`);
+  }
 }
 
 export async function apiRequestWithoutRetry(

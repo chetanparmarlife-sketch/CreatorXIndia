@@ -3,9 +3,11 @@ import type { Server } from "node:http";
 import {
   profiles, socials, brands, campaigns, applications, deliverables,
   messages, transactions, withdrawals, community, notifications, audit, analytics,
-  eligibility, resetDb, upsertPushToken,
+  eligibility, resetDb, upsertPushToken, getBrandProfile, updateBrandProfile,
+  getBrandDashboardStats, getBrandActivity, createCampaign,
 } from "./storage";
 import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES, type UserRole } from "@creatorx/schema";
+import { z } from "zod";
 import {
   AuthError,
   generateOtp,
@@ -26,6 +28,39 @@ const ADMIN_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
   "admin_finance",
   "admin_readonly",
 ]);
+
+const brandProfileSchema = z.object({
+  companyName: z.string().trim().min(1, "companyName is required"),
+  industry: z.string().trim().min(1, "industry is required"),
+  websiteUrl: z.string().trim().url("websiteUrl must be a valid URL"),
+  gstin: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().trim().regex(/^[0-9A-Z]{15}$/i, "gstin must be a valid GSTIN").optional(),
+  ),
+  logoUrl: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().trim().url("logoUrl must be a valid URL").optional(),
+  ),
+});
+
+const campaignCreateSchema = z.object({
+  title: z.string().trim().min(1, "title is required"),
+  description: z.string().trim().min(1, "description is required"),
+  niche: z.enum(INDIAN_NICHES),
+  platforms: z.array(z.enum(["instagram", "youtube", "twitter", "linkedin"])).min(1, "platforms are required"),
+  deliverable_type: z.enum(["post", "reel", "story", "video"]),
+  budget_paise: z.coerce.number().int("budget_paise must be an integer").min(50_000, "budget_paise must be at least 50000"),
+  max_creators: z.coerce.number().int("max_creators must be an integer").min(1, "max_creators must be at least 1"),
+  application_deadline: z.string().refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) return false;
+    return date.getTime() > Date.now();
+  }, "application_deadline must be a future date"),
+  brief_url: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().trim().url("brief_url must be a valid URL").optional(),
+  ),
+});
 
 function getUserId(req: Request): string | null {
   if (req.user?.id) return req.user.id;
@@ -930,6 +965,67 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     await upsertPushToken(user.id, token, platform);
     return res.json({ ok: true });
+  });
+
+  // ------------------------------------------------------------------
+  // Brand profile + dashboard
+  // ------------------------------------------------------------------
+  app.get("/api/brand/profile", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const brand = await getBrandProfile(user.id);
+    return res.json({ brand });
+  });
+
+  app.patch("/api/brand/profile", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = brandProfileSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const brand = await updateBrandProfile(user.id, parsed.data);
+    await audit.log(user.id, "update_brand_profile", "brand", user.id, parsed.data);
+    return res.json({ brand });
+  });
+
+  app.get("/api/brand/dashboard-stats", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const stats = await getBrandDashboardStats(user.id);
+    return res.json(stats);
+  });
+
+  app.get("/api/brand/activity", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const activity = await getBrandActivity(user.id);
+    return res.json({ activity });
+  });
+
+  app.post("/api/brand/campaigns", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = campaignCreateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const campaign = await createCampaign(user.id, parsed.data);
+    await audit.log(user.id, "create_brand_campaign", "campaign", campaign.id, {
+      title: campaign.title,
+      budget_paise: parsed.data.budget_paise,
+      max_creators: parsed.data.max_creators,
+      application_deadline: parsed.data.application_deadline,
+    });
+
+    return res.json({ campaign });
   });
 
   return httpServer;
