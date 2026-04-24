@@ -5,14 +5,29 @@ import {
   messages, transactions, withdrawals, community, notifications, audit, analytics,
   eligibility, resetDb,
 } from "./storage";
-import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES } from "@creatorx/schema";
+import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES, type UserRole } from "@creatorx/schema";
+import {
+  AuthError,
+  generateOtp,
+  revokeAllRefreshTokens,
+  revokeRefreshToken,
+  signAccessToken,
+  signRefreshToken,
+  verifyOtp,
+  verifyRefreshToken,
+} from "./auth";
+import { requireAuth, requireRole } from "./middleware/auth";
 
-/**
- * Simple mock auth — the frontend sends an X-User-Id header. In a real Supabase
- * deployment this would be replaced by verifying a JWT. See /supabase/migration.sql
- * for the RLS policies that enforce the same rules server-side.
- */
+const ADMIN_ROLES: ReadonlySet<UserRole> = new Set([
+  "admin",
+  "admin_ops",
+  "admin_support",
+  "admin_finance",
+  "admin_readonly",
+]);
+
 function getUserId(req: Request): string | null {
+  if (req.user?.id) return req.user.id;
   const uid = (req.headers["x-user-id"] as string) || "";
   return uid || null;
 }
@@ -38,8 +53,13 @@ async function requireUser(req: Request, res: Response): Promise<string | null> 
 async function requireAdmin(req: Request, res: Response): Promise<string | null> {
   const uid = await requireUser(req, res);
   if (!uid) return null;
+
+  if (req.user && ADMIN_ROLES.has(req.user.role)) {
+    return uid;
+  }
+
   const p = await profiles.byId(uid);
-  if (!p || p.role !== "admin") {
+  if (!p || !ADMIN_ROLES.has(p.role)) {
     res.status(403).json({ error: "Admin only" });
     return null;
   }
@@ -47,6 +67,10 @@ async function requireAdmin(req: Request, res: Response): Promise<string | null>
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  app.use("/api/admin", requireAuth, requireRole("admin_ops", "admin_support", "admin_finance", "admin_readonly"));
+  app.use("/api/creator", requireAuth, requireRole("creator"));
+  app.use("/api/brand", requireAuth, requireRole("brand"));
+
   // ------------------------------------------------------------------
   // Auth
   // ------------------------------------------------------------------
@@ -99,6 +123,88 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         id: p.id, email: p.email, full_name: p.full_name, handle: p.handle,
       })),
     });
+  });
+
+  app.post("/api/auth/request-otp", async (req, res) => {
+    const { email } = req.body || {};
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({ error: "Email required" });
+    }
+
+    try {
+      const otp = await generateOtp(email);
+      console.log(`[auth] OTP for ${email}: ${otp}`);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/auth/verify-otp", async (req, res) => {
+    const { email, otp } = req.body || {};
+    if (!email || !otp || typeof email !== "string" || typeof otp !== "string") {
+      return res.status(400).json({ error: "Email and OTP required" });
+    }
+
+    try {
+      const user = await verifyOtp(email, otp);
+      const accessToken = signAccessToken(user.id, user.role);
+      const refreshToken = await signRefreshToken(user.id);
+      return res.json({ accessToken, refreshToken, user });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/auth/refresh", async (req, res) => {
+    const { refreshToken } = req.body || {};
+    if (!refreshToken || typeof refreshToken !== "string") {
+      return res.status(400).json({ error: "refreshToken required" });
+    }
+
+    try {
+      const userId = await verifyRefreshToken(refreshToken);
+      const user = await profiles.byId(userId);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid refresh token" });
+      }
+      const accessToken = signAccessToken(user.id, user.role);
+      return res.json({ accessToken });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/auth/logout", requireAuth, async (req, res) => {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { refreshToken } = req.body || {};
+
+    try {
+      if (typeof refreshToken === "string" && refreshToken.trim().length > 0) {
+        await revokeRefreshToken(refreshToken, user.id);
+      } else {
+        await revokeAllRefreshTokens(user.id);
+      }
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
   });
 
   // ------------------------------------------------------------------

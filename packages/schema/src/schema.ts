@@ -19,7 +19,14 @@ import {
 
 // ---------- Enums ----------
 
-export type UserRole = "creator" | "admin";
+export type UserRole =
+  | "creator"
+  | "brand"
+  | "admin"
+  | "admin_ops"
+  | "admin_support"
+  | "admin_finance"
+  | "admin_readonly";
 
 export type CampaignStatus = "draft" | "open" | "closed" | "completed";
 
@@ -347,7 +354,33 @@ export interface AuditLog {
   created_at: string;
 }
 
-export const userRoleEnum = pgEnum("user_role", ["creator", "admin"]);
+export interface OtpCode {
+  id: string;
+  email: string;
+  hash: string;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+}
+
+export interface RefreshToken {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export const userRoleEnum = pgEnum("user_role", [
+  "creator",
+  "brand",
+  "admin",
+  "admin_ops",
+  "admin_support",
+  "admin_finance",
+  "admin_readonly",
+]);
 export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "open", "closed", "completed"]);
 export const applicationStatusEnum = pgEnum("application_status", ["pending", "accepted", "rejected", "withdrawn"]);
 export const deliverableStatusEnum = pgEnum("deliverable_status", ["pending", "submitted", "revision", "approved", "live", "rejected"]);
@@ -596,5 +629,23 @@ export const audit_log = pgTable("audit_log", {
   entity_kind: text("entity_kind").notNull(),
   entity_id: text("entity_id").notNull(),
   details: text("details"),
+  created_at: text("created_at").notNull(),
+});
+
+export const otp_codes = pgTable("otp_codes", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  hash: text("hash").notNull(),
+  expires_at: text("expires_at").notNull(),
+  used_at: text("used_at"),
+  created_at: text("created_at").notNull(),
+});
+
+export const refresh_tokens = pgTable("refresh_tokens", {
+  id: text("id").primaryKey(),
+  user_id: text("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  token_hash: text("token_hash").notNull(),
+  expires_at: text("expires_at").notNull(),
+  revoked_at: text("revoked_at"),
   created_at: text("created_at").notNull(),
 });
