@@ -18,7 +18,7 @@ import {
 } from "./auth";
 import { requireAuth, requireRole } from "./middleware/auth";
 
-const ADMIN_ROLES: ReadonlySet<UserRole> = new Set([
+const ADMIN_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
   "admin",
   "admin_ops",
   "admin_support",

@@ -7,7 +7,7 @@ import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Notification, NotificationKind } from "@creatorx/schema";
 
-const ICON_MAP: Record<NotificationKind, { icon: string; color: string }> = {
+const ICON_MAP: Partial<Record<NotificationKind, { icon: string; color: string }>> = {
   application_accepted: { icon: "check_circle", color: "text-green-400" },
   application_rejected: { icon: "cancel", color: "text-red-400" },
   deliverable_feedback: { icon: "edit_note", color: "text-orange-400" },
@@ -67,7 +67,7 @@ export default function NotificationsPage() {
           </div>
         ) : (
           sorted.map((n) => {
-            const meta = ICON_MAP[n.kind];
+            const meta = ICON_MAP[n.kind] ?? { icon: "notifications", color: "text-muted-foreground" };
             const Row = (
               <div
                 className={cn(

@@ -36,14 +36,10 @@ const ACCESS_TOKEN_TTL = "15m";
 const REFRESH_TOKEN_TTL = "30d";
 const OTP_TTL_MS = 10 * 60 * 1000;
 
-const jwtSecret = process.env.JWT_SECRET;
-if (!jwtSecret) {
-  throw new Error("JWT_SECRET is required");
-}
-
-const otpSecret = process.env.OTP_SECRET;
-if (!otpSecret) {
-  throw new Error("OTP_SECRET is required");
+const JWT_SECRET = process.env.JWT_SECRET ?? "";
+const OTP_SECRET = process.env.OTP_SECRET ?? "";
+if (!JWT_SECRET || !OTP_SECRET) {
+  throw new Error("JWT_SECRET and OTP_SECRET must be set in environment");
 }
 
 function nowIso(): string {
@@ -59,7 +55,7 @@ function normalizeEmail(email: string): string {
 }
 
 function hashRefreshToken(token: string): string {
-  return createHash("sha256").update(`${token}:${otpSecret}`).digest("hex");
+  return createHash("sha256").update(`${token}:${OTP_SECRET}`).digest("hex");
 }
 
 function normalizeRole(role: UserRole): AccessTokenRole {
@@ -169,7 +165,7 @@ export async function generateOtp(email: string): Promise<string> {
   }
 
   const otp = randomInt(0, 1_000_000).toString().padStart(6, "0");
-  const hash = await bcrypt.hash(`${otp}:${otpSecret}`, 10);
+  const hash = await bcrypt.hash(`${otp}:${OTP_SECRET}`, 10);
   const createdAt = nowIso();
   const expiresAt = toIsoAfter(OTP_TTL_MS);
 
@@ -209,7 +205,7 @@ export async function verifyOtp(email: string, otp: string): Promise<Profile> {
   for (const row of candidates) {
     if (Date.parse(row.expires_at) <= nowMs) continue;
 
-    const ok = await bcrypt.compare(`${otp}:${otpSecret}`, row.hash);
+    const ok = await bcrypt.compare(`${otp}:${OTP_SECRET}`, row.hash);
     if (!ok) continue;
 
     await db
@@ -242,7 +238,7 @@ export function signAccessToken(userId: string, role: UserRole): string {
       role: normalizedRole,
       type: "access",
     },
-    jwtSecret,
+    JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_TTL },
   );
 }
@@ -254,7 +250,7 @@ export async function signRefreshToken(userId: string): Promise<string> {
       type: "refresh",
       jti: randomUUID(),
     },
-    jwtSecret,
+    JWT_SECRET,
     { expiresIn: REFRESH_TOKEN_TTL },
   );
 
@@ -272,7 +268,7 @@ export async function signRefreshToken(userId: string): Promise<string> {
 
 export function verifyAccessToken(token: string): AccessTokenClaims {
   try {
-    const decoded = jwt.verify(token, jwtSecret);
+    const decoded = jwt.verify(token, JWT_SECRET);
     return parseAccessTokenPayload(decoded);
   } catch {
     throw new AuthError(401, "Invalid access token");
@@ -282,7 +278,7 @@ export function verifyAccessToken(token: string): AccessTokenClaims {
 export async function verifyRefreshToken(token: string): Promise<string> {
   let claims: RefreshTokenClaims;
   try {
-    claims = parseRefreshTokenPayload(jwt.verify(token, jwtSecret));
+    claims = parseRefreshTokenPayload(jwt.verify(token, JWT_SECRET));
   } catch {
     throw new AuthError(401, "Invalid refresh token");
   }

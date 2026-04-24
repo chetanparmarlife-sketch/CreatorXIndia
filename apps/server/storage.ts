@@ -99,13 +99,14 @@ async function writeAudit(
   diff?: unknown,
 ): Promise<AuditLog> {
   const created_at = now();
+  const actorId = actorUserId ?? "system";
   const diff_json = toDiffJson(diff);
   const details = diff_json ? JSON.stringify(diff_json) : null;
 
-  const row: AuditLog = {
+  const row = {
     id: newId(),
-    actor_user_id: actorUserId,
-    admin_id: actorUserId,
+    actor_user_id: actorId ?? "system",
+    admin_id: actorId ?? "system",
     action,
     target_type: targetType,
     target_id: targetId,
