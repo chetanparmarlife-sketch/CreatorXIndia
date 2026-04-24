@@ -48,6 +48,8 @@ import CampaignDetailPage from "@/pages/brand/campaigns/[id]";
 import CampaignApplicationsPage from "@/pages/brand/campaigns/[id]/applications";
 import CampaignDeliverablesPage from "@/pages/brand/campaigns/[id]/deliverables";
 import WalletPage from "@/pages/brand/wallet";
+import MarketplacePage from "@/pages/brand/marketplace";
+import CreatorProfilePage from "@/pages/brand/creators/[id]";
 
 // Admin pages
 import AdminDashboardPage from "@/pages/admin/dashboard";
@@ -193,6 +195,9 @@ function AppRouter() {
       <Route path="/brand/onboarding">
         <BrandRoute><BrandOnboardingPage /></BrandRoute>
       </Route>
+      <Route path="/brand/marketplace">
+        <BrandRoute><MarketplacePage /></BrandRoute>
+      </Route>
       <Route path="/brand/campaigns/new">
         <BrandRoute><NewCampaignPage /></BrandRoute>
       </Route>
@@ -207,6 +212,9 @@ function AppRouter() {
       </Route>
       <Route path="/brand/campaigns/:id">
         <BrandRoute><CampaignDetailPage /></BrandRoute>
+      </Route>
+      <Route path="/brand/creators/:creatorId">
+        <BrandRoute><CreatorProfilePage /></BrandRoute>
       </Route>
       <Route path="/brand/wallet">
         <BrandRoute><WalletPage /></BrandRoute>

@@ -11,3 +11,4 @@
 | S07 | 3.4-3.5 | Brand Campaign List + Detail | 1 day | done |
 | S08 | 3.6-3.7 | Brand Applications + Deliverables | 1 day | done |
 | S09 | 3.8 | Wallet + Razorpay + Invoices | 1 day | done |
+| S10 | 4.1-4.2 | Marketplace + Creator Profiles | 1 day | done |

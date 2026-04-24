@@ -14,6 +14,7 @@ import type {
   Notification,
   PushPlatform,
   Profile,
+  SocialPlatform,
   SocialAccount,
   Transaction,
   WalletTransaction,
@@ -237,6 +238,55 @@ export interface IStorage {
   }): Promise<Invoice>;
   getWalletSummary(brandId: string): Promise<{ balancePaise: number; transactions: WalletTransaction[] }>;
   getBrandInvoices(brandId: string): Promise<Invoice[]>;
+  searchCreators(params: {
+    search?: string;
+    niches?: string[];
+    platforms?: SocialPlatform[];
+    minFollowers?: number;
+    maxFollowers?: number;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    creators: Array<{
+      id: string;
+      display_name: string;
+      handle: string;
+      bio: string | null;
+      avatar_url: string | null;
+      follower_count: number;
+      niches: string[];
+      platforms: SocialPlatform[];
+      profile_complete: boolean;
+    }>;
+    nextCursor: string | null;
+  }>;
+  getCreatorProfile(creatorId: string): Promise<{
+    id: string;
+    display_name: string;
+    handle: string;
+    bio: string | null;
+    avatar_url: string | null;
+    follower_count: number;
+    following_count: number;
+    avg_engagement_rate: number;
+    niches: string[];
+    languages: string[];
+    platforms: Array<{ platform: SocialPlatform; handle: string; url: string | null }>;
+    profile_complete: boolean;
+  } | null>;
+  getCreatorStats(creatorId: string): Promise<{
+    campaignsCompleted: number;
+    averageRating: number;
+    totalEarningsPaise: number;
+  }>;
+  getCreatorPortfolio(creatorId: string): Promise<Array<{
+    deliverableId: string;
+    campaignTitle: string;
+    deliverableType: string;
+    contentUrl: string;
+    approvedAt: string;
+  }>>;
+  inviteCreatorToCampaign(brandId: string, campaignId: string, creatorId: string): Promise<Application>;
   createCampaign(
     userId: string,
     data: {
@@ -623,6 +673,7 @@ export async function updateCampaignStatus(
 
 function mapApplicationStatusForBrand(status: Application["status"]): "pending" | "approved" | "rejected" | null {
   if (status === "pending") return "pending";
+  if (status === "invited") return "pending";
   if (status === "accepted") return "approved";
   if (status === "rejected" || status === "withdrawn") return "rejected";
   return null;
@@ -914,6 +965,308 @@ export async function getBrandInvoices(brandId: string): Promise<Invoice[]> {
     .from(invoicesTable)
     .where(eq(invoicesTable.brand_id, brandId))
     .orderBy(desc(invoicesTable.created_at));
+}
+
+function isCreatorProfileComplete(profile: Profile, socials: SocialAccount[]): boolean {
+  const connectedPlatforms = socials.filter((social) => social.connected);
+  return Boolean(
+    profile.role === "creator" &&
+      profile.full_name.trim() &&
+      profile.handle.trim() &&
+      profile.bio &&
+      profile.bio.trim().length > 0 &&
+      profile.avatar_url &&
+      profile.niches.length > 0 &&
+      profile.languages.length > 0 &&
+      profile.total_reach > 0 &&
+      connectedPlatforms.length > 0,
+  );
+}
+
+function socialUrl(platform: SocialPlatform, handle: string): string | null {
+  const cleanHandle = handle.replace(/^@+/, "");
+  if (!cleanHandle) return null;
+  if (platform === "instagram") return `https://instagram.com/${cleanHandle}`;
+  if (platform === "youtube") return `https://youtube.com/@${cleanHandle}`;
+  if (platform === "twitter") return `https://x.com/${cleanHandle}`;
+  if (platform === "linkedin") return `https://linkedin.com/in/${cleanHandle}`;
+  return null;
+}
+
+export async function searchCreators(params: {
+  search?: string;
+  niches?: string[];
+  platforms?: SocialPlatform[];
+  minFollowers?: number;
+  maxFollowers?: number;
+  cursor?: string;
+  limit?: number;
+}): Promise<{
+  creators: Array<{
+    id: string;
+    display_name: string;
+    handle: string;
+    bio: string | null;
+    avatar_url: string | null;
+    follower_count: number;
+    niches: string[];
+    platforms: SocialPlatform[];
+    profile_complete: boolean;
+  }>;
+  nextCursor: string | null;
+}> {
+  await ensureSeeded();
+  const limit = params.limit ?? 20;
+  const search = (params.search ?? "").trim().toLowerCase();
+
+  const [allProfiles, allSocials] = await Promise.all([profiles.list(), db.select().from(socialAccountsTable)]);
+
+  const socialsByUser = new Map<string, SocialAccount[]>();
+  for (const social of allSocials) {
+    const existing = socialsByUser.get(social.user_id) ?? [];
+    existing.push(social);
+    socialsByUser.set(social.user_id, existing);
+  }
+
+  let creators = allProfiles
+    .filter((profile) => profile.role === "creator")
+    .map((profile) => {
+      const userSocials = socialsByUser.get(profile.id) ?? [];
+      const connectedPlatforms = userSocials.filter((social) => social.connected).map((social) => social.platform);
+      const profile_complete = isCreatorProfileComplete(profile, userSocials);
+      return {
+        id: profile.id,
+        display_name: profile.full_name,
+        handle: profile.handle,
+        bio: profile.bio,
+        avatar_url: profile.avatar_url,
+        follower_count: profile.total_reach,
+        niches: profile.niches,
+        platforms: Array.from(new Set(connectedPlatforms)),
+        profile_complete,
+      };
+    })
+    .filter((creator) => creator.profile_complete);
+
+  if (search) {
+    creators = creators.filter((creator) => {
+      const haystack = `${creator.display_name} ${creator.handle} ${creator.bio ?? ""}`.toLowerCase();
+      return haystack.includes(search);
+    });
+  }
+
+  if (params.niches && params.niches.length > 0) {
+    const wanted = new Set(params.niches.map((niche) => niche.toLowerCase()));
+    creators = creators.filter((creator) => creator.niches.some((niche) => wanted.has(niche.toLowerCase())));
+  }
+
+  if (params.platforms && params.platforms.length > 0) {
+    const wanted = new Set(params.platforms);
+    creators = creators.filter((creator) => creator.platforms.some((platform) => wanted.has(platform)));
+  }
+
+  if (typeof params.minFollowers === "number") {
+    creators = creators.filter((creator) => creator.follower_count >= params.minFollowers!);
+  }
+  if (typeof params.maxFollowers === "number") {
+    creators = creators.filter((creator) => creator.follower_count <= params.maxFollowers!);
+  }
+
+  creators.sort((a, b) => {
+    if (a.follower_count === b.follower_count) return a.id.localeCompare(b.id);
+    return b.follower_count - a.follower_count;
+  });
+
+  let startIndex = 0;
+  if (params.cursor) {
+    const cursorIndex = creators.findIndex((creator) => creator.id === params.cursor);
+    if (cursorIndex >= 0) startIndex = cursorIndex + 1;
+  }
+
+  const slice = creators.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + limit < creators.length;
+  const nextCursor = hasMore ? slice[slice.length - 1]?.id ?? null : null;
+
+  return {
+    creators: slice,
+    nextCursor,
+  };
+}
+
+export async function getCreatorProfile(creatorId: string): Promise<{
+  id: string;
+  display_name: string;
+  handle: string;
+  bio: string | null;
+  avatar_url: string | null;
+  follower_count: number;
+  following_count: number;
+  avg_engagement_rate: number;
+  niches: string[];
+  languages: string[];
+  platforms: Array<{ platform: SocialPlatform; handle: string; url: string | null }>;
+  profile_complete: boolean;
+} | null> {
+  await ensureSeeded();
+  const profile = await profiles.byId(creatorId);
+  if (!profile || profile.role !== "creator") return null;
+
+  const socials = await db.select().from(socialAccountsTable).where(eq(socialAccountsTable.user_id, creatorId));
+  const profile_complete = isCreatorProfileComplete(profile, socials);
+  if (!profile_complete) return null;
+
+  const connectedPlatforms = socials
+    .filter((social) => social.connected)
+    .map((social) => ({
+      platform: social.platform,
+      handle: social.handle,
+      url: socialUrl(social.platform, social.handle),
+    }));
+
+  return {
+    id: profile.id,
+    display_name: profile.full_name,
+    handle: profile.handle,
+    bio: profile.bio,
+    avatar_url: profile.avatar_url,
+    follower_count: profile.total_reach,
+    following_count: 0,
+    avg_engagement_rate: profile.avg_engagement,
+    niches: profile.niches,
+    languages: profile.languages,
+    platforms: connectedPlatforms,
+    profile_complete: true,
+  };
+}
+
+export async function getCreatorStats(creatorId: string): Promise<{
+  campaignsCompleted: number;
+  averageRating: number;
+  totalEarningsPaise: number;
+}> {
+  await ensureSeeded();
+  const [creatorDeliverables, creatorTransactions] = await Promise.all([
+    db.select().from(deliverablesTable).where(eq(deliverablesTable.creator_id, creatorId)),
+    db
+      .select()
+      .from(transactionsTable)
+      .where(
+        and(
+          eq(transactionsTable.user_id, creatorId),
+          eq(transactionsTable.kind, "earning"),
+          eq(transactionsTable.status, "completed"),
+        ),
+      ),
+  ]);
+
+  const completedCampaigns = new Set(
+    creatorDeliverables
+      .filter((deliverable) => deliverable.status === "approved" || deliverable.status === "live")
+      .map((deliverable) => deliverable.campaign_id),
+  );
+  const approved = creatorDeliverables.filter((deliverable) => deliverable.status === "approved" || deliverable.status === "live").length;
+  const rejected = creatorDeliverables.filter((deliverable) => deliverable.status === "rejected").length;
+  const reviewed = approved + rejected;
+  const averageRating =
+    reviewed === 0 ? 0 : Math.max(0, Math.min(5, Number((5 - (rejected / reviewed) * 2).toFixed(1))));
+
+  const totalEarningsPaise = creatorTransactions.reduce((sum, transaction) => sum + transaction.amount_cents, 0);
+
+  return {
+    campaignsCompleted: completedCampaigns.size,
+    averageRating,
+    totalEarningsPaise,
+  };
+}
+
+export async function getCreatorPortfolio(creatorId: string): Promise<Array<{
+  deliverableId: string;
+  campaignTitle: string;
+  deliverableType: string;
+  contentUrl: string;
+  approvedAt: string;
+}>> {
+  await ensureSeeded();
+  const creatorDeliverables = await db
+    .select()
+    .from(deliverablesTable)
+    .where(eq(deliverablesTable.creator_id, creatorId));
+
+  const approvedRows = creatorDeliverables
+    .filter(
+      (deliverable) =>
+        (deliverable.status === "approved" || deliverable.status === "live") &&
+        Boolean(deliverable.asset_url ?? deliverable.live_url) &&
+        Boolean(deliverable.decided_at),
+    )
+    .sort((a, b) => (a.decided_at! < b.decided_at! ? 1 : -1));
+
+  const campaignIds = Array.from(new Set(approvedRows.map((row) => row.campaign_id)));
+  const campaignsMap = new Map<string, Campaign>();
+  if (campaignIds.length > 0) {
+    const rows = await db.select().from(campaignsTable).where(inArray(campaignsTable.id, campaignIds));
+    rows.forEach((row) => campaignsMap.set(row.id, row));
+  }
+
+  return approvedRows.map((row) => ({
+    deliverableId: row.id,
+    campaignTitle: campaignsMap.get(row.campaign_id)?.title ?? "Campaign",
+    deliverableType: row.kind,
+    contentUrl: row.asset_url ?? row.live_url ?? "",
+    approvedAt: row.decided_at ?? row.submitted_at ?? now(),
+  }));
+}
+
+export async function inviteCreatorToCampaign(
+  brandId: string,
+  campaignId: string,
+  creatorId: string,
+): Promise<Application> {
+  await ensureSeeded();
+  const campaign = await campaigns.byId(campaignId);
+  if (!campaign) {
+    throw new Error("CAMPAIGN_NOT_FOUND");
+  }
+  if (campaign.brand_id !== brandId) {
+    throw new Error("FORBIDDEN");
+  }
+
+  const creatorProfile = await profiles.byId(creatorId);
+  if (!creatorProfile || creatorProfile.role !== "creator") {
+    throw new Error("CREATOR_NOT_FOUND");
+  }
+
+  const creatorSocials = await db.select().from(socialAccountsTable).where(eq(socialAccountsTable.user_id, creatorId));
+  if (!isCreatorProfileComplete(creatorProfile, creatorSocials)) {
+    throw new Error("CREATOR_INCOMPLETE");
+  }
+
+  const [existing] = await db
+    .select({ id: applicationsTable.id })
+    .from(applicationsTable)
+    .where(and(eq(applicationsTable.campaign_id, campaignId), eq(applicationsTable.creator_id, creatorId)))
+    .limit(1);
+  if (existing) {
+    throw new Error("DUPLICATE_INVITE");
+  }
+
+  const row: Application = {
+    id: newId(),
+    campaign_id: campaignId,
+    creator_id: creatorId,
+    pitch: "Invited by brand",
+    status: "invited",
+    applied_at: now(),
+    decided_at: null,
+    decided_by: null,
+  };
+  await db.insert(applicationsTable).values(row);
+  await writeAudit(brandId, "invite_creator_to_campaign", "application", row.id, {
+    campaign_id: campaignId,
+    creator_id: creatorId,
+    status: "invited",
+  });
+  return row;
 }
 
 export const profiles = {

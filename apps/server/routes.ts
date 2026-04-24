@@ -10,7 +10,8 @@ import {
   getCampaign, getCampaignStats, updateCampaignStatus, getCampaignApplications,
   updateApplicationStatus, getCampaignDeliverables, updateDeliverableStatus,
   createWalletTransaction, updateWalletTransaction, creditWalletBalance,
-  createInvoice, getWalletSummary, getBrandInvoices,
+  createInvoice, getWalletSummary, getBrandInvoices, searchCreators,
+  getCreatorProfile, getCreatorStats, getCreatorPortfolio, inviteCreatorToCampaign,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -107,6 +108,9 @@ const brandDeliverableStatusUpdateSchema = z
       });
     }
   });
+const brandInviteSchema = z.object({
+  creatorId: z.string().trim().min(1, "creatorId is required"),
+});
 const walletTopupSchema = z.object({
   amountPaise: z.coerce.number().int("amountPaise must be an integer").min(100_000, "Minimum top-up is ₹1000").max(10_000_000, "UPI limit exceeded"),
 });
@@ -125,6 +129,7 @@ function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>
 
 function mapApplicationStatusForBrandResponse(status: Application["status"]): "pending" | "approved" | "rejected" {
   if (status === "pending") return "pending";
+  if (status === "invited") return "pending";
   if (status === "accepted") return "approved";
   return "rejected";
 }
@@ -1343,6 +1348,86 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         rejection_reason: updated.feedback ?? null,
       },
     });
+  });
+
+  app.get("/api/brand/marketplace", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const search = typeof req.query.search === "string" ? req.query.search : undefined;
+    const niches = typeof req.query.niches === "string" && req.query.niches.trim().length > 0
+      ? req.query.niches.split(",").map((item) => item.trim()).filter(Boolean)
+      : [];
+    const platforms = typeof req.query.platforms === "string" && req.query.platforms.trim().length > 0
+      ? req.query.platforms
+          .split(",")
+          .map((item) => item.trim())
+          .filter((item): item is "instagram" | "youtube" | "twitter" | "linkedin" =>
+            item === "instagram" || item === "youtube" || item === "twitter" || item === "linkedin")
+      : [];
+    const minFollowers = typeof req.query.minFollowers === "string" && req.query.minFollowers.length > 0
+      ? Number(req.query.minFollowers)
+      : undefined;
+    const maxFollowers = typeof req.query.maxFollowers === "string" && req.query.maxFollowers.length > 0
+      ? Number(req.query.maxFollowers)
+      : undefined;
+    const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+    const parsedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 20;
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 20) : 20;
+
+    const result = await searchCreators({
+      search,
+      niches,
+      platforms,
+      minFollowers: Number.isFinite(minFollowers ?? NaN) ? minFollowers : undefined,
+      maxFollowers: Number.isFinite(maxFollowers ?? NaN) ? maxFollowers : undefined,
+      cursor,
+      limit,
+    });
+
+    return res.json(result);
+  });
+
+  app.get("/api/brand/creators/:creatorId", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const creatorId = typeof req.params.creatorId === "string" ? req.params.creatorId : "";
+    if (!creatorId) return res.status(400).json({ error: "Invalid creator id" });
+
+    const profile = await getCreatorProfile(creatorId);
+    if (!profile) return res.status(404).json({ error: "Creator not found" });
+
+    const [stats, portfolio] = await Promise.all([
+      getCreatorStats(creatorId),
+      getCreatorPortfolio(creatorId),
+    ]);
+
+    return res.json({ profile, stats, portfolio });
+  });
+
+  app.post("/api/brand/campaigns/:campaignId/invite", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const campaignId = typeof req.params.campaignId === "string" ? req.params.campaignId : "";
+    if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
+
+    const parsed = brandInviteSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const application = await inviteCreatorToCampaign(user.id, campaignId, parsed.data.creatorId);
+      return res.json({ application });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "INVITE_FAILED";
+      if (code === "FORBIDDEN") return res.status(403).json({ error: "Forbidden" });
+      if (code === "DUPLICATE_INVITE") return res.status(409).json({ error: "Creator already applied or invited" });
+      if (code === "CAMPAIGN_NOT_FOUND" || code === "CREATOR_NOT_FOUND" || code === "CREATOR_INCOMPLETE") {
+        return res.status(404).json({ error: "Creator or campaign not found" });
+      }
+      return res.status(400).json({ error: "Could not send invite" });
+    }
   });
 
   async function finalizeWalletTopup(

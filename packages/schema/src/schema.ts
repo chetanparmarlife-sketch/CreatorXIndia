@@ -32,6 +32,7 @@ export type CampaignStatus = "draft" | "open" | "closed" | "completed";
 
 export type ApplicationStatus =
   | "pending"
+  | "invited"
   | "accepted"
   | "rejected"
   | "withdrawn";
@@ -420,7 +421,7 @@ export const userRoleEnum = pgEnum("user_role", [
   "admin_readonly",
 ]);
 export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "open", "closed", "completed"]);
-export const applicationStatusEnum = pgEnum("application_status", ["pending", "accepted", "rejected", "withdrawn"]);
+export const applicationStatusEnum = pgEnum("application_status", ["pending", "invited", "accepted", "rejected", "withdrawn"]);
 export const deliverableStatusEnum = pgEnum("deliverable_status", ["pending", "submitted", "revision", "approved", "live", "rejected"]);
 export const transactionTypeEnum = pgEnum("transaction_type", ["earning", "withdrawal", "bonus", "adjustment"]);
 export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "completed", "failed"]);
