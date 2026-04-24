@@ -11,6 +11,7 @@ import type {
   Message,
   MessageThread,
   Notification,
+  PushPlatform,
   Profile,
   SocialAccount,
   Transaction,
@@ -37,6 +38,7 @@ import {
   messages as messagesTable,
   nextInvoiceNumber,
   notifications as notificationsTable,
+  push_tokens as pushTokensTable,
   profiles as profilesTable,
   social_accounts as socialAccountsTable,
   suggestedPayoutMethod,
@@ -129,15 +131,50 @@ function sortAscBy<T extends { created_at: string }>(rows: T[]): T[] {
   return rows.sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
 }
 
+export interface IStorage {
+  upsertPushToken(userId: string, token: string, platform: PushPlatform): Promise<void>;
+}
+
 export async function resetDb(): Promise<void> {
   await db.execute(
     sql.raw(
-      'TRUNCATE TABLE "messages", "message_threads", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
+      'TRUNCATE TABLE "push_tokens", "messages", "message_threads", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
     ),
   );
   initPromise = null;
   await ensureSeeded();
   await writeAudit("system", "reset_database", "system", "database", { reset: true });
+}
+
+export async function upsertPushToken(userId: string, token: string, platform: PushPlatform): Promise<void> {
+  await ensureSeeded();
+
+  const [existing] = await db
+    .select({ id: pushTokensTable.id })
+    .from(pushTokensTable)
+    .where(and(eq(pushTokensTable.user_id, userId), eq(pushTokensTable.platform, platform)))
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(pushTokensTable)
+      .set({ token, updated_at: now() })
+      .where(eq(pushTokensTable.id, existing.id));
+    await writeAudit(userId, "update_push_token", "push_token", existing.id, { platform });
+    return;
+  }
+
+  const row = {
+    id: newId(),
+    user_id: userId,
+    token,
+    platform,
+    created_at: now(),
+    updated_at: now(),
+  };
+
+  await db.insert(pushTokensTable).values(row);
+  await writeAudit(userId, "create_push_token", "push_token", row.id, { platform });
 }
 
 export const profiles = {

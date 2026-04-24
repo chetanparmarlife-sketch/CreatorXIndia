@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import {
   profiles, socials, brands, campaigns, applications, deliverables,
   messages, transactions, withdrawals, community, notifications, audit, analytics,
-  eligibility, resetDb,
+  eligibility, resetDb, upsertPushToken,
 } from "./storage";
 import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES, type UserRole } from "@creatorx/schema";
 import {
@@ -17,6 +17,7 @@ import {
   verifyRefreshToken,
 } from "./auth";
 import { requireAuth, requireRole } from "./middleware/auth";
+import { getPublicUrl, getUploadUrl } from "./lib/r2";
 
 const ADMIN_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
   "admin",
@@ -885,6 +886,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const uid = await requireAdmin(req, res); if (!uid) return;
     await resetDb();
     res.json({ ok: true });
+  });
+
+  // ------------------------------------------------------------------
+  // Uploads (R2 presign)
+  // ------------------------------------------------------------------
+  app.post("/api/uploads/presign", requireAuth, async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const { key, contentType } = req.body || {};
+    if (typeof key !== "string" || typeof contentType !== "string" || !key || !contentType) {
+      return res.status(400).json({ error: "key and contentType are required" });
+    }
+
+    if (!(key.startsWith("avatars/") || key.startsWith("deliverables/") || key.startsWith("kyc/"))) {
+      return res.status(400).json({ error: "Invalid key prefix" });
+    }
+
+    try {
+      const uploadUrl = await getUploadUrl(key, contentType);
+      const publicUrl = getPublicUrl(key);
+      return res.json({ uploadUrl, publicUrl });
+    } catch {
+      return res.status(500).json({ error: "Failed to create upload URL" });
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // Push tokens
+  // ------------------------------------------------------------------
+  app.post("/api/push-tokens", requireAuth, async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const { token, platform } = req.body || {};
+    if (typeof token !== "string" || !token) {
+      return res.status(400).json({ error: "token is required" });
+    }
+    if (platform !== "ios" && platform !== "android" && platform !== "web") {
+      return res.status(400).json({ error: "platform must be ios, android, or web" });
+    }
+
+    await upsertPushToken(user.id, token, platform);
+    return res.json({ ok: true });
   });
 
   return httpServer;

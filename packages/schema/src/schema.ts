@@ -64,6 +64,8 @@ export type SocialPlatform =
   | "twitter"
   | "linkedin";
 
+export type PushPlatform = "ios" | "android" | "web";
+
 // Indian influencer tiers (by follower count)
 export type CreatorTier = "nano" | "micro" | "mid" | "macro" | "mega";
 
@@ -372,6 +374,15 @@ export interface RefreshToken {
   created_at: string;
 }
 
+export interface PushToken {
+  id: string;
+  user_id: string;
+  token: string;
+  platform: PushPlatform;
+  created_at: string;
+  updated_at: string;
+}
+
 export const userRoleEnum = pgEnum("user_role", [
   "creator",
   "brand",
@@ -388,6 +399,7 @@ export const transactionTypeEnum = pgEnum("transaction_type", ["earning", "withd
 export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "completed", "failed"]);
 export const withdrawalStatusEnum = pgEnum("withdrawal_status", ["requested", "approved", "paid", "rejected"]);
 export const socialPlatformEnum = pgEnum("social_platform", ["instagram", "youtube", "twitter", "linkedin"]);
+export const pushPlatformEnum = pgEnum("push_platform", ["ios", "android", "web"]);
 export const creatorTierEnum = pgEnum("creator_tier", ["nano", "micro", "mid", "macro", "mega"]);
 export const kycStatusEnum = pgEnum("kyc_status", ["none", "pending", "verified", "rejected"]);
 export const eventKindEnum = pgEnum("event_kind", ["event", "perk", "news"]);
@@ -648,4 +660,13 @@ export const refresh_tokens = pgTable("refresh_tokens", {
   expires_at: text("expires_at").notNull(),
   revoked_at: text("revoked_at"),
   created_at: text("created_at").notNull(),
+});
+
+export const push_tokens = pgTable("push_tokens", {
+  id: text("id").primaryKey(),
+  user_id: text("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  token: text("token").notNull(),
+  platform: pushPlatformEnum("platform").notNull(),
+  created_at: text("created_at").notNull(),
+  updated_at: text("updated_at").notNull(),
 });
