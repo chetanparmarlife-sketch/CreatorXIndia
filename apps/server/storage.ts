@@ -160,6 +160,53 @@ export interface IStorage {
     rejected: number;
   } | null>;
   updateCampaignStatus(userId: string, campaignId: string, status: Campaign["status"]): Promise<Campaign | null>;
+  getCampaignApplications(
+    userId: string,
+    campaignId: string,
+    status?: "pending" | "approved" | "rejected",
+  ): Promise<Array<{
+    id: string;
+    campaign_id: string;
+    creator_id: string;
+    pitch: string;
+    status: "pending" | "approved" | "rejected";
+    applied_at: string;
+    decided_at: string | null;
+    decided_by: string | null;
+    display_name: string;
+    handle: string;
+    avatar_url: string | null;
+    follower_count: number;
+    niches: string[];
+  }>>;
+  updateApplicationStatus(
+    userId: string,
+    applicationId: string,
+    status: "approved" | "rejected",
+  ): Promise<Application | null>;
+  getCampaignDeliverables(
+    userId: string,
+    campaignId: string,
+    status?: "pending" | "approved" | "rejected",
+  ): Promise<Array<{
+    id: string;
+    application_id: string;
+    campaign_id: string;
+    creator_id: string;
+    deliverable_type: string;
+    status: "pending" | "approved" | "rejected";
+    submitted_at: string | null;
+    content_url: string | null;
+    rejection_reason: string | null;
+    display_name: string;
+    avatar_url: string | null;
+  }>>;
+  updateDeliverableStatus(
+    userId: string,
+    deliverableId: string,
+    status: "approved" | "rejected",
+    rejectionReason?: string,
+  ): Promise<Deliverable | null>;
   createCampaign(
     userId: string,
     data: {
@@ -541,6 +588,154 @@ export async function updateCampaignStatus(
   });
 
   return updated;
+}
+
+function mapApplicationStatusForBrand(status: Application["status"]): "pending" | "approved" | "rejected" | null {
+  if (status === "pending") return "pending";
+  if (status === "accepted") return "approved";
+  if (status === "rejected" || status === "withdrawn") return "rejected";
+  return null;
+}
+
+function mapDeliverableStatusForBrand(status: Deliverable["status"]): "pending" | "approved" | "rejected" | null {
+  if (status === "pending" || status === "submitted") return "pending";
+  if (status === "approved") return "approved";
+  if (status === "rejected") return "rejected";
+  return null;
+}
+
+export async function getCampaignApplications(
+  userId: string,
+  campaignId: string,
+  status?: "pending" | "approved" | "rejected",
+): Promise<Array<{
+  id: string;
+  campaign_id: string;
+  creator_id: string;
+  pitch: string;
+  status: "pending" | "approved" | "rejected";
+  applied_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+  display_name: string;
+  handle: string;
+  avatar_url: string | null;
+  follower_count: number;
+  niches: string[];
+}>> {
+  await ensureSeeded();
+  const campaign = await getCampaign(userId, campaignId);
+  if (!campaign) return [];
+
+  const rows = await db
+    .select()
+    .from(applicationsTable)
+    .where(eq(applicationsTable.campaign_id, campaignId));
+
+  const enriched = await Promise.all(
+    rows.map(async (application) => {
+      const mappedStatus = mapApplicationStatusForBrand(application.status);
+      if (!mappedStatus) return null;
+
+      const creator = await profiles.byId(application.creator_id);
+      return {
+        ...application,
+        status: mappedStatus,
+        display_name: creator?.full_name || creator?.handle || "Creator",
+        handle: creator?.handle || "creator",
+        avatar_url: creator?.avatar_url ?? null,
+        follower_count: creator?.total_reach ?? 0,
+        niches: creator?.niches ?? [],
+      };
+    }),
+  );
+
+  let filtered = enriched.filter((row): row is NonNullable<typeof row> => row !== null);
+  if (status) {
+    filtered = filtered.filter((row) => row.status === status);
+  }
+
+  return filtered.sort((a, b) => (a.applied_at < b.applied_at ? 1 : -1));
+}
+
+export async function updateApplicationStatus(
+  userId: string,
+  applicationId: string,
+  status: "approved" | "rejected",
+): Promise<Application | null> {
+  await ensureSeeded();
+  const decision: "accepted" | "rejected" = status === "approved" ? "accepted" : "rejected";
+  return applications.decide(applicationId, decision, userId);
+}
+
+export async function getCampaignDeliverables(
+  userId: string,
+  campaignId: string,
+  status?: "pending" | "approved" | "rejected",
+): Promise<Array<{
+  id: string;
+  application_id: string;
+  campaign_id: string;
+  creator_id: string;
+  deliverable_type: string;
+  status: "pending" | "approved" | "rejected";
+  submitted_at: string | null;
+  content_url: string | null;
+  rejection_reason: string | null;
+  display_name: string;
+  avatar_url: string | null;
+}>> {
+  await ensureSeeded();
+  const campaign = await getCampaign(userId, campaignId);
+  if (!campaign) return [];
+
+  const rows = await db
+    .select()
+    .from(deliverablesTable)
+    .where(eq(deliverablesTable.campaign_id, campaignId));
+
+  const enriched = await Promise.all(
+    rows.map(async (deliverable) => {
+      const mappedStatus = mapDeliverableStatusForBrand(deliverable.status);
+      if (!mappedStatus) return null;
+
+      const creator = await profiles.byId(deliverable.creator_id);
+      return {
+        id: deliverable.id,
+        application_id: deliverable.application_id,
+        campaign_id: deliverable.campaign_id,
+        creator_id: deliverable.creator_id,
+        deliverable_type: deliverable.kind,
+        status: mappedStatus,
+        submitted_at: deliverable.submitted_at,
+        content_url: deliverable.asset_url ?? deliverable.live_url ?? null,
+        rejection_reason: deliverable.feedback ?? null,
+        display_name: creator?.full_name || creator?.handle || "Creator",
+        avatar_url: creator?.avatar_url ?? null,
+      };
+    }),
+  );
+
+  let filtered = enriched.filter((row): row is NonNullable<typeof row> => row !== null);
+  if (status) {
+    filtered = filtered.filter((row) => row.status === status);
+  }
+
+  return filtered.sort((a, b) => {
+    const aTime = a.submitted_at ?? "";
+    const bTime = b.submitted_at ?? "";
+    return aTime < bTime ? 1 : -1;
+  });
+}
+
+export async function updateDeliverableStatus(
+  userId: string,
+  deliverableId: string,
+  status: "approved" | "rejected",
+  rejectionReason?: string,
+): Promise<Deliverable | null> {
+  await ensureSeeded();
+  return deliverables.decide(deliverableId, status, rejectionReason ?? "", userId);
 }
 
 export const profiles = {

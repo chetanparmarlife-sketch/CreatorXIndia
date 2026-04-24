@@ -5,9 +5,18 @@ import {
   messages, transactions, withdrawals, community, notifications, audit, analytics,
   eligibility, resetDb, upsertPushToken, getBrandProfile, updateBrandProfile,
   getBrandDashboardStats, getBrandActivity, createCampaign, getBrandCampaigns,
-  getCampaign, getCampaignStats, updateCampaignStatus,
+  getCampaign, getCampaignStats, updateCampaignStatus, getCampaignApplications,
+  updateApplicationStatus, getCampaignDeliverables, updateDeliverableStatus,
 } from "./storage";
-import { INDIAN_NICHES, INDIAN_CITIES, INDIAN_LANGUAGES, type UserRole, type Campaign } from "@creatorx/schema";
+import {
+  INDIAN_NICHES,
+  INDIAN_CITIES,
+  INDIAN_LANGUAGES,
+  type UserRole,
+  type Campaign,
+  type Application,
+  type Deliverable,
+} from "@creatorx/schema";
 import { z } from "zod";
 import {
   AuthError,
@@ -67,12 +76,46 @@ const brandCampaignStatusSchema = z.enum(["draft", "active", "paused", "complete
 const campaignStatusUpdateSchema = z.object({
   status: z.enum(["paused", "active"]),
 });
+const brandApplicationFilterSchema = z.enum(["pending", "approved", "rejected"]);
+const brandApplicationStatusUpdateSchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+});
+const brandDeliverableFilterSchema = z.enum(["pending", "approved", "rejected"]);
+const brandDeliverableStatusUpdateSchema = z
+  .object({
+    status: z.enum(["approved", "rejected"]),
+    rejection_reason: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z.string().trim().min(1, "rejection_reason is required when rejecting").optional(),
+    ),
+  })
+  .superRefine((value, ctx) => {
+    if (value.status === "rejected" && !value.rejection_reason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "rejection_reason is required when rejecting",
+        path: ["rejection_reason"],
+      });
+    }
+  });
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
   if (!status) return undefined;
   if (status === "active") return "open";
   if (status === "paused") return "closed";
   return status;
+}
+
+function mapApplicationStatusForBrandResponse(status: Application["status"]): "pending" | "approved" | "rejected" {
+  if (status === "pending") return "pending";
+  if (status === "accepted") return "approved";
+  return "rejected";
+}
+
+function mapDeliverableStatusForBrandResponse(status: Deliverable["status"]): "pending" | "approved" | "rejected" {
+  if (status === "pending" || status === "submitted") return "pending";
+  if (status === "approved") return "approved";
+  return "rejected";
 }
 
 function getUserId(req: Request): string | null {
@@ -1145,6 +1188,127 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     return res.json({ campaign });
+  });
+
+  app.get("/api/brand/campaigns/:id/applications", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
+
+    const campaign = await campaigns.byId(campaignId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    if (campaign.brand_id !== user.id) return res.status(403).json({ error: "Forbidden" });
+
+    const statusParam = req.query.status;
+    if (statusParam !== undefined && typeof statusParam !== "string") {
+      return res.status(400).json({ error: "status must be a string" });
+    }
+
+    const parsedStatus = statusParam === undefined ? undefined : brandApplicationFilterSchema.safeParse(statusParam);
+    if (parsedStatus && !parsedStatus.success) {
+      return res.status(400).json({ error: "Invalid status filter" });
+    }
+
+    const applications = await getCampaignApplications(user.id, campaignId, parsedStatus?.data);
+    return res.json({ campaign: { id: campaign.id, title: campaign.title }, applications });
+  });
+
+  app.patch("/api/brand/applications/:applicationId/status", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const applicationId = typeof req.params.applicationId === "string" ? req.params.applicationId : "";
+    if (!applicationId) return res.status(400).json({ error: "Invalid application id" });
+
+    const parsed = brandApplicationStatusUpdateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const current = await applications.byId(applicationId);
+    if (!current) return res.status(404).json({ error: "Application not found" });
+
+    const campaign = await campaigns.byId(current.campaign_id);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    if (campaign.brand_id !== user.id) return res.status(403).json({ error: "Forbidden" });
+
+    if (current.status !== "pending") {
+      return res.status(400).json({ error: "Invalid status transition" });
+    }
+
+    const updated = await updateApplicationStatus(user.id, applicationId, parsed.data.status);
+    if (!updated) return res.status(404).json({ error: "Application not found" });
+
+    return res.json({
+      application: {
+        ...updated,
+        status: mapApplicationStatusForBrandResponse(updated.status),
+      },
+    });
+  });
+
+  app.get("/api/brand/campaigns/:id/deliverables", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
+
+    const campaign = await campaigns.byId(campaignId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    if (campaign.brand_id !== user.id) return res.status(403).json({ error: "Forbidden" });
+
+    const statusParam = req.query.status;
+    if (statusParam !== undefined && typeof statusParam !== "string") {
+      return res.status(400).json({ error: "status must be a string" });
+    }
+
+    const parsedStatus = statusParam === undefined ? undefined : brandDeliverableFilterSchema.safeParse(statusParam);
+    if (parsedStatus && !parsedStatus.success) {
+      return res.status(400).json({ error: "Invalid status filter" });
+    }
+
+    const deliverables = await getCampaignDeliverables(user.id, campaignId, parsedStatus?.data);
+    return res.json({ campaign: { id: campaign.id, title: campaign.title }, deliverables });
+  });
+
+  app.patch("/api/brand/deliverables/:deliverableId/status", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const deliverableId = typeof req.params.deliverableId === "string" ? req.params.deliverableId : "";
+    if (!deliverableId) return res.status(400).json({ error: "Invalid deliverable id" });
+
+    const parsed = brandDeliverableStatusUpdateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const current = await deliverables.byId(deliverableId);
+    if (!current) return res.status(404).json({ error: "Deliverable not found" });
+
+    const campaign = await campaigns.byId(current.campaign_id);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    if (campaign.brand_id !== user.id) return res.status(403).json({ error: "Forbidden" });
+
+    const currentStatus = mapDeliverableStatusForBrandResponse(current.status);
+    if (currentStatus !== "pending") {
+      return res.status(400).json({ error: "Invalid status transition" });
+    }
+
+    const updated = await updateDeliverableStatus(
+      user.id,
+      deliverableId,
+      parsed.data.status,
+      parsed.data.rejection_reason,
+    );
+    if (!updated) return res.status(404).json({ error: "Deliverable not found" });
+
+    return res.json({
+      deliverable: {
+        ...updated,
+        status: mapDeliverableStatusForBrandResponse(updated.status),
+        rejection_reason: updated.feedback ?? null,
+      },
+    });
   });
 
   return httpServer;

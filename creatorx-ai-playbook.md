@@ -9,3 +9,4 @@
 | S05 | 2 | Strip Creator + Role Routing | 1 day | done |
 | S06 | 3.1-3.3 | Brand Signup, Dashboard, Campaign Create | 1 day | done |
 | S07 | 3.4-3.5 | Brand Campaign List + Detail | 1 day | done |
+| S08 | 3.6-3.7 | Brand Applications + Deliverables | 1 day | done |
