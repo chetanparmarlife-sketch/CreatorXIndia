@@ -1,6 +1,6 @@
 import "dotenv/config";
 import type { Request, Response, Express } from "express";
-import { createApp } from "../server/app";
+import { createApp } from "../apps/server/app";
 
 let appPromise: Promise<Express> | null = null;
 

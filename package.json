@@ -1,13 +1,18 @@
 {
-  "name": "rest-express",
+  "name": "creatorx",
   "version": "1.0.0",
+  "private": true,
   "license": "MIT",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev": "pnpm --filter @creatorx/web dev",
     "build": "tsx script/build.ts",
-    "start": "NODE_ENV=production node dist/index.cjs",
-    "check": "tsc",
+    "start": "NODE_ENV=production node apps/server/dist/index.cjs",
+    "check": "tsc --noEmit",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

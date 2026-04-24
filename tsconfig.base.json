@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "jsx": "preserve",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./apps/web/client/src/*"],
+      "@creatorx/schema": ["./packages/schema/src/index.ts"],
+      "@creatorx/schema/*": ["./packages/schema/src/*"],
+      "@creatorx/types": ["./packages/types/src/index.ts"],
+      "@creatorx/types/*": ["./packages/types/src/*"],
+      "@creatorx/api-client": ["./packages/api-client/src/index.ts"],
+      "@creatorx/api-client/*": ["./packages/api-client/src/*"],
+      "@creatorx/design-tokens": ["./packages/design-tokens/src/index.ts"],
+      "@creatorx/design-tokens/*": ["./packages/design-tokens/src/*"]
+    }
+  }
+}
