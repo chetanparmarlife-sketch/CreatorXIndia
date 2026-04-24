@@ -8,6 +8,7 @@ import type {
   CommunityItem,
   CreatorTier,
   Deliverable,
+  Invoice,
   Message,
   MessageThread,
   Notification,
@@ -15,6 +16,7 @@ import type {
   Profile,
   SocialAccount,
   Transaction,
+  WalletTransaction,
   Withdrawal,
 } from "@creatorx/schema";
 import {
@@ -29,6 +31,7 @@ import {
   computeWithdrawalTax,
   db,
   deliverables as deliverablesTable,
+  invoices as invoicesTable,
   isValidAadhaarLast4,
   isValidGSTIN,
   isValidIFSC,
@@ -43,6 +46,7 @@ import {
   social_accounts as socialAccountsTable,
   suggestedPayoutMethod,
   transactions as transactionsTable,
+  wallet_transactions as walletTransactionsTable,
   withdrawals as withdrawalsTable,
 } from "@creatorx/schema";
 import { seed } from "./seed";
@@ -207,6 +211,32 @@ export interface IStorage {
     status: "approved" | "rejected",
     rejectionReason?: string,
   ): Promise<Deliverable | null>;
+  createWalletTransaction(data: {
+    brand_id: string;
+    type: "credit" | "debit";
+    amount_paise: number;
+    description: string;
+    razorpay_order_id?: string | null;
+    razorpay_payment_id?: string | null;
+    status: "pending" | "completed" | "failed";
+  }): Promise<WalletTransaction>;
+  updateWalletTransaction(
+    id: string,
+    patch: Partial<Pick<WalletTransaction, "status" | "razorpay_payment_id" | "description">>,
+  ): Promise<WalletTransaction | null>;
+  creditWalletBalance(brandId: string, amountPaise: number): Promise<Brand | null>;
+  debitWalletBalance(brandId: string, amountPaise: number, description: string): Promise<Brand>;
+  createInvoice(data: {
+    brand_id: string;
+    invoice_number: string;
+    amount_paise: number;
+    gst_paise: number;
+    total_paise: number;
+    pdf_url?: string | null;
+    issued_at: string;
+  }): Promise<Invoice>;
+  getWalletSummary(brandId: string): Promise<{ balancePaise: number; transactions: WalletTransaction[] }>;
+  getBrandInvoices(brandId: string): Promise<Invoice[]>;
   createCampaign(
     userId: string,
     data: {
@@ -226,7 +256,7 @@ export interface IStorage {
 export async function resetDb(): Promise<void> {
   await db.execute(
     sql.raw(
-      'TRUNCATE TABLE "push_tokens", "messages", "message_threads", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
+      'TRUNCATE TABLE "wallet_transactions", "invoices", "push_tokens", "messages", "message_threads", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
     ),
   );
   initPromise = null;
@@ -281,6 +311,7 @@ export async function getBrandProfile(userId: string): Promise<Brand> {
     industry: "",
     description: null,
     contact_email: profile?.email ?? null,
+    wallet_balance_paise: 0,
     created_at: now(),
   };
 
@@ -738,6 +769,153 @@ export async function updateDeliverableStatus(
   return deliverables.decide(deliverableId, status, rejectionReason ?? "", userId);
 }
 
+export async function createWalletTransaction(data: {
+  brand_id: string;
+  type: "credit" | "debit";
+  amount_paise: number;
+  description: string;
+  razorpay_order_id?: string | null;
+  razorpay_payment_id?: string | null;
+  status: "pending" | "completed" | "failed";
+}): Promise<WalletTransaction> {
+  await ensureSeeded();
+  const row: WalletTransaction = {
+    id: newId(),
+    brand_id: data.brand_id,
+    type: data.type,
+    amount_paise: data.amount_paise,
+    description: data.description,
+    razorpay_order_id: data.razorpay_order_id ?? null,
+    razorpay_payment_id: data.razorpay_payment_id ?? null,
+    status: data.status,
+    created_at: now(),
+  };
+  await db.insert(walletTransactionsTable).values(row);
+  return row;
+}
+
+export async function updateWalletTransaction(
+  id: string,
+  patch: Partial<Pick<WalletTransaction, "status" | "razorpay_payment_id" | "description">>,
+): Promise<WalletTransaction | null> {
+  await ensureSeeded();
+  const [updated] = await db
+    .update(walletTransactionsTable)
+    .set(patch)
+    .where(eq(walletTransactionsTable.id, id))
+    .returning();
+  return updated ?? null;
+}
+
+export async function creditWalletBalance(brandId: string, amountPaise: number): Promise<Brand | null> {
+  await ensureSeeded();
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId)).limit(1);
+  if (!brand) return null;
+  const [updated] = await db
+    .update(brandsTable)
+    .set({ wallet_balance_paise: brand.wallet_balance_paise + amountPaise })
+    .where(eq(brandsTable.id, brandId))
+    .returning();
+  if (updated) {
+    await writeAudit(brandId, "credit_wallet_balance", "brand", brandId, {
+      amount_paise: amountPaise,
+      new_balance_paise: updated.wallet_balance_paise,
+    });
+  }
+  return updated ?? null;
+}
+
+export async function debitWalletBalance(
+  brandId: string,
+  amountPaise: number,
+  description: string,
+): Promise<Brand> {
+  await ensureSeeded();
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId)).limit(1);
+  if (!brand) {
+    throw new Error("Brand not found");
+  }
+  const nextBalance = brand.wallet_balance_paise - amountPaise;
+  if (nextBalance < 0) {
+    throw new Error("Insufficient wallet balance");
+  }
+
+  const [updated] = await db
+    .update(brandsTable)
+    .set({ wallet_balance_paise: nextBalance })
+    .where(eq(brandsTable.id, brandId))
+    .returning();
+
+  if (!updated) {
+    throw new Error("Brand not found");
+  }
+
+  await createWalletTransaction({
+    brand_id: brandId,
+    type: "debit",
+    amount_paise: amountPaise,
+    description,
+    status: "completed",
+  });
+
+  await writeAudit(brandId, "debit_wallet_balance", "brand", brandId, {
+    amount_paise: amountPaise,
+    new_balance_paise: updated.wallet_balance_paise,
+    description,
+  });
+
+  return updated;
+}
+
+export async function createInvoice(data: {
+  brand_id: string;
+  invoice_number: string;
+  amount_paise: number;
+  gst_paise: number;
+  total_paise: number;
+  pdf_url?: string | null;
+  issued_at: string;
+}): Promise<Invoice> {
+  await ensureSeeded();
+  const row: Invoice = {
+    id: newId(),
+    brand_id: data.brand_id,
+    invoice_number: data.invoice_number,
+    amount_paise: data.amount_paise,
+    gst_paise: data.gst_paise,
+    total_paise: data.total_paise,
+    pdf_url: data.pdf_url ?? null,
+    issued_at: data.issued_at,
+    created_at: now(),
+  };
+  await db.insert(invoicesTable).values(row);
+  return row;
+}
+
+export async function getWalletSummary(brandId: string): Promise<{ balancePaise: number; transactions: WalletTransaction[] }> {
+  await ensureSeeded();
+  const [brand] = await db.select({ wallet_balance_paise: brandsTable.wallet_balance_paise }).from(brandsTable).where(eq(brandsTable.id, brandId)).limit(1);
+  const rows = await db
+    .select()
+    .from(walletTransactionsTable)
+    .where(eq(walletTransactionsTable.brand_id, brandId))
+    .orderBy(desc(walletTransactionsTable.created_at))
+    .limit(20);
+  return {
+    balancePaise: brand?.wallet_balance_paise ?? 0,
+    transactions: rows,
+  };
+}
+
+export async function getBrandInvoices(brandId: string): Promise<Invoice[]> {
+  await ensureSeeded();
+  return db
+    .select()
+    .from(invoicesTable)
+    .where(eq(invoicesTable.brand_id, brandId))
+    .orderBy(desc(invoicesTable.created_at));
+}
+
 export const profiles = {
   async list(): Promise<Profile[]> {
     await ensureSeeded();
@@ -1085,9 +1263,9 @@ export const brands = {
     return row ?? null;
   },
 
-  async create(data: Omit<Brand, "id" | "created_at">): Promise<Brand> {
+  async create(data: Omit<Brand, "id" | "created_at" | "wallet_balance_paise">): Promise<Brand> {
     await ensureSeeded();
-    const row: Brand = { ...data, id: newId(), created_at: now() };
+    const row: Brand = { ...data, id: newId(), wallet_balance_paise: 0, created_at: now() };
     await db.insert(brandsTable).values(row);
     await writeAudit("system", "create_brand", "brand", row.id, row);
     return row;
@@ -1319,6 +1497,22 @@ export const deliverables = {
     admin_id: string,
   ): Promise<Deliverable | null> {
     await ensureSeeded();
+    const current = await deliverables.byId(id);
+    if (!current) return null;
+
+    let approvedCampaign: Campaign | null = null;
+    let perItem = 0;
+
+    if (status === "approved") {
+      approvedCampaign = await campaigns.byId(current.campaign_id);
+      if (!approvedCampaign) {
+        throw new Error("Campaign not found");
+      }
+      const totalDeliverables = approvedCampaign.deliverables.reduce((sum, item) => sum + item.qty, 0) || 1;
+      perItem = Math.round(approvedCampaign.base_earning_cents / totalDeliverables);
+      await debitWalletBalance(approvedCampaign.brand_id, perItem, `${approvedCampaign.title} — ${current.kind}`);
+    }
+
     const [d] = await db
       .update(deliverablesTable)
       .set({ status, feedback, decided_at: now() })
@@ -1328,15 +1522,16 @@ export const deliverables = {
     if (!d) return null;
 
     if (status === "approved") {
-      const c = await campaigns.byId(d.campaign_id);
-      const totalDeliverables = c?.deliverables.reduce((a, x) => a + x.qty, 0) || 1;
-      const perItem = Math.round((c?.base_earning_cents || 0) / totalDeliverables);
+      const c = approvedCampaign;
+      if (!c) {
+        throw new Error("Campaign not found");
+      }
 
       await transactions.create(d.creator_id, {
         kind: "earning",
         status: "completed",
         amount_cents: perItem,
-        description: `${c?.title || "Campaign"} — ${d.kind}`,
+        description: `${c.title} — ${d.kind}`,
         reference_id: d.campaign_id,
       });
 

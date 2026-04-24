@@ -227,7 +227,7 @@ function buildSeedData() {
     { id: "brand-oneplus", name: "OnePlus India", logo_url: img("photo-1511707171634-5f897ff02aa9", 200, 200), verified: true, website: "https://oneplus.in", industry: "Tech", description: "Never Settle.", contact_email: "marketing@oneplus.example", created_at: daysAgo(750) },
     { id: "brand-mivi", name: "Mivi", logo_url: img("photo-1572569511254-d8f925fe2cbb", 200, 200), verified: true, website: "https://mivi.com", industry: "Tech", description: "Made in India audio.", contact_email: "hello@mivi.example", created_at: daysAgo(400) },
     { id: "brand-sugarcosmetics", name: "SUGAR Cosmetics", logo_url: img("photo-1596462502278-27bfdc403348", 200, 200), verified: true, website: "https://sugarcosmetics.com", industry: "Beauty", description: "Bold. Proud. Unapologetic.", contact_email: "influencer@sugar.example", created_at: daysAgo(450) },
-  ];
+  ].map((brand) => ({ ...brand, wallet_balance_paise: 0 }));
 
   // ---------- Campaigns (INR, realistic Indian rates) ----------
   const campaigns: Campaign[] = [

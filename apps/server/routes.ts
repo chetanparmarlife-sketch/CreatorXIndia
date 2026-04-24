@@ -1,5 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { eq } from "drizzle-orm";
 import {
   profiles, socials, brands, campaigns, applications, deliverables,
   messages, transactions, withdrawals, community, notifications, audit, analytics,
@@ -7,6 +9,8 @@ import {
   getBrandDashboardStats, getBrandActivity, createCampaign, getBrandCampaigns,
   getCampaign, getCampaignStats, updateCampaignStatus, getCampaignApplications,
   updateApplicationStatus, getCampaignDeliverables, updateDeliverableStatus,
+  createWalletTransaction, updateWalletTransaction, creditWalletBalance,
+  createInvoice, getWalletSummary, getBrandInvoices,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -16,6 +20,9 @@ import {
   type Campaign,
   type Application,
   type Deliverable,
+  db,
+  invoices as invoicesTable,
+  wallet_transactions as walletTransactionsTable,
 } from "@creatorx/schema";
 import { z } from "zod";
 import {
@@ -30,6 +37,8 @@ import {
 } from "./auth";
 import { requireAuth, requireRole } from "./middleware/auth";
 import { getPublicUrl, getUploadUrl } from "./lib/r2";
+import { createOrder, verifyWebhookSignature } from "./lib/razorpay";
+import { calculateGst, generateInvoiceNumber } from "./lib/invoice";
 
 const ADMIN_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
   "admin",
@@ -98,6 +107,14 @@ const brandDeliverableStatusUpdateSchema = z
       });
     }
   });
+const walletTopupSchema = z.object({
+  amountPaise: z.coerce.number().int("amountPaise must be an integer").min(100_000, "Minimum top-up is ₹1000").max(10_000_000, "UPI limit exceeded"),
+});
+const walletVerifySchema = z.object({
+  razorpay_order_id: z.string().trim().min(1, "razorpay_order_id is required"),
+  razorpay_payment_id: z.string().trim().min(1, "razorpay_payment_id is required"),
+  razorpay_signature: z.string().trim().min(1, "razorpay_signature is required"),
+});
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
   if (!status) return undefined;
@@ -116,6 +133,17 @@ function mapDeliverableStatusForBrandResponse(status: Deliverable["status"]): "p
   if (status === "pending" || status === "submitted") return "pending";
   if (status === "approved") return "approved";
   return "rejected";
+}
+
+function verifyRazorpayPaymentSignature(orderId: string, paymentId: string, signature: string): boolean {
+  const secret = process.env.RAZORPAY_KEY_SECRET ?? "";
+  if (!secret) return false;
+
+  const expected = createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const signatureBuffer = Buffer.from(signature, "utf8");
+  if (expectedBuffer.length !== signatureBuffer.length) return false;
+  return timingSafeEqual(expectedBuffer, signatureBuffer);
 }
 
 function getUserId(req: Request): string | null {
@@ -161,7 +189,13 @@ async function requireAdmin(req: Request, res: Response): Promise<string | null>
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use("/api/admin", requireAuth, requireRole("admin_ops", "admin_support", "admin_finance", "admin_readonly"));
   app.use("/api/creator", requireAuth, requireRole("creator"));
-  app.use("/api/brand", requireAuth, requireRole("brand"));
+  app.use("/api/brand", (req, res, next) => {
+    if (req.path === "/wallet/webhook") {
+      next();
+      return;
+    }
+    requireAuth(req, res, () => requireRole("brand")(req, res, next));
+  });
 
   // ------------------------------------------------------------------
   // Auth
@@ -1309,6 +1343,203 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         rejection_reason: updated.feedback ?? null,
       },
     });
+  });
+
+  async function finalizeWalletTopup(
+    brandId: string,
+    razorpayOrderId: string,
+    razorpayPaymentId: string,
+  ): Promise<{ newBalancePaise: number; invoiceNumber: string }> {
+    const matchingTransactions = await db
+      .select()
+      .from(walletTransactionsTable)
+      .where(eq(walletTransactionsTable.razorpay_order_id, razorpayOrderId));
+    const walletTransaction = matchingTransactions.find((row) => row.brand_id === brandId) ?? null;
+
+    if (!walletTransaction) {
+      throw new Error("Wallet transaction not found");
+    }
+
+    if (walletTransaction.status === "completed") {
+      const summary = await getWalletSummary(brandId);
+      const existingInvoices = await getBrandInvoices(brandId);
+      return {
+        newBalancePaise: summary.balancePaise,
+        invoiceNumber: existingInvoices[0]?.invoice_number ?? "",
+      };
+    }
+
+    await updateWalletTransaction(walletTransaction.id, {
+      status: "completed",
+      razorpay_payment_id: razorpayPaymentId,
+    });
+
+    const creditedBrand = await creditWalletBalance(brandId, walletTransaction.amount_paise);
+    if (!creditedBrand) {
+      throw new Error("Brand not found");
+    }
+
+    const profile = await profiles.byId(brandId);
+    const hasGstin = Boolean(profile?.gstin);
+    const gstPaise = calculateGst(walletTransaction.amount_paise, hasGstin);
+    const totalPaise = walletTransaction.amount_paise + gstPaise;
+
+    const fyPrefix = generateInvoiceNumber(0).split("/").slice(0, 2).join("/");
+    const allInvoices = await db.select({ invoice_number: invoicesTable.invoice_number }).from(invoicesTable);
+    const fyCount = allInvoices.filter((invoice) => invoice.invoice_number.startsWith(`${fyPrefix}/`)).length;
+    const invoiceNumber = generateInvoiceNumber(fyCount);
+
+    await createInvoice({
+      brand_id: brandId,
+      invoice_number: invoiceNumber,
+      amount_paise: walletTransaction.amount_paise,
+      gst_paise: gstPaise,
+      total_paise: totalPaise,
+      issued_at: new Date().toISOString(),
+      pdf_url: null,
+    });
+
+    await audit.log(brandId, "wallet_topup_completed", "wallet_transaction", walletTransaction.id, {
+      razorpay_order_id: razorpayOrderId,
+      razorpay_payment_id: razorpayPaymentId,
+      amount_paise: walletTransaction.amount_paise,
+      gst_paise: gstPaise,
+      invoice_number: invoiceNumber,
+    });
+
+    return {
+      newBalancePaise: creditedBrand.wallet_balance_paise,
+      invoiceNumber,
+    };
+  }
+
+  app.post("/api/brand/wallet/topup", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = walletTopupSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const order = await createOrder(parsed.data.amountPaise, `wallet-${user.id}-${Date.now()}`);
+      await createWalletTransaction({
+        brand_id: user.id,
+        type: "credit",
+        amount_paise: parsed.data.amountPaise,
+        description: "Brand wallet top-up",
+        razorpay_order_id: order.id,
+        status: "pending",
+      });
+
+      return res.json({
+        orderId: order.id,
+        amount: order.amount,
+        currency: "INR",
+        keyId: process.env.RAZORPAY_KEY_ID ?? "",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create top-up order";
+      const status = message === "UPI limit exceeded" ? 400 : 500;
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  app.post("/api/brand/wallet/verify", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = walletVerifySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const validSignature = verifyRazorpayPaymentSignature(
+      parsed.data.razorpay_order_id,
+      parsed.data.razorpay_payment_id,
+      parsed.data.razorpay_signature,
+    );
+    if (!validSignature) {
+      return res.status(400).json({ error: "Invalid Razorpay signature" });
+    }
+
+    try {
+      const result = await finalizeWalletTopup(
+        user.id,
+        parsed.data.razorpay_order_id,
+        parsed.data.razorpay_payment_id,
+      );
+      return res.json({
+        success: true,
+        newBalancePaise: result.newBalancePaise,
+        invoiceNumber: result.invoiceNumber,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wallet verification failed";
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  app.post("/api/brand/wallet/webhook", async (req, res) => {
+    const signatureHeader = req.headers["x-razorpay-signature"];
+    const signature = typeof signatureHeader === "string" ? signatureHeader : "";
+    const bodyString = typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {});
+
+    if (!verifyWebhookSignature(bodyString, signature)) {
+      return res.status(400).json({ error: "Invalid webhook signature" });
+    }
+
+    const payload = (req.body ?? {}) as {
+      event?: string;
+      payload?: {
+        payment?: {
+          entity?: {
+            id?: string;
+            order_id?: string;
+          };
+        };
+      };
+    };
+
+    if (payload.event === "payment.captured") {
+      const orderId = payload.payload?.payment?.entity?.order_id;
+      const paymentId = payload.payload?.payment?.entity?.id;
+
+      if (typeof orderId === "string" && typeof paymentId === "string") {
+        void (async () => {
+          try {
+            const rows = await db
+              .select()
+              .from(walletTransactionsTable)
+              .where(eq(walletTransactionsTable.razorpay_order_id, orderId));
+            const transaction = rows[0];
+            if (!transaction) return;
+            await finalizeWalletTopup(transaction.brand_id, orderId, paymentId);
+          } catch (error) {
+            console.error("[wallet-webhook] Failed to process payment", error);
+          }
+        })();
+      }
+    }
+
+    return res.status(200).json({ ok: true });
+  });
+
+  app.get("/api/brand/wallet", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const wallet = await getWalletSummary(user.id);
+    return res.json(wallet);
+  });
+
+  app.get("/api/brand/invoices", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const invoices = await getBrandInvoices(user.id);
+    return res.json({ invoices });
   });
 
   return httpServer;

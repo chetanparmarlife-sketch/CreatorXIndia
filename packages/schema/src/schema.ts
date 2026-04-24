@@ -65,6 +65,8 @@ export type SocialPlatform =
   | "linkedin";
 
 export type PushPlatform = "ios" | "android" | "web";
+export type WalletTransactionType = "credit" | "debit";
+export type WalletTransactionStatus = "pending" | "completed" | "failed";
 
 // Indian influencer tiers (by follower count)
 export type CreatorTier = "nano" | "micro" | "mid" | "macro" | "mega";
@@ -180,6 +182,7 @@ export interface Brand {
   industry: string;
   description: string | null;
   contact_email: string | null;
+  wallet_balance_paise: number;
   created_at: string;
 }
 
@@ -383,6 +386,30 @@ export interface PushToken {
   updated_at: string;
 }
 
+export interface WalletTransaction {
+  id: string;
+  brand_id: string;
+  type: WalletTransactionType;
+  amount_paise: number;
+  description: string;
+  razorpay_order_id: string | null;
+  razorpay_payment_id: string | null;
+  status: WalletTransactionStatus;
+  created_at: string;
+}
+
+export interface Invoice {
+  id: string;
+  brand_id: string;
+  invoice_number: string;
+  amount_paise: number;
+  gst_paise: number;
+  total_paise: number;
+  pdf_url: string | null;
+  issued_at: string;
+  created_at: string;
+}
+
 export const userRoleEnum = pgEnum("user_role", [
   "creator",
   "brand",
@@ -400,6 +427,8 @@ export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "c
 export const withdrawalStatusEnum = pgEnum("withdrawal_status", ["requested", "approved", "paid", "rejected"]);
 export const socialPlatformEnum = pgEnum("social_platform", ["instagram", "youtube", "twitter", "linkedin"]);
 export const pushPlatformEnum = pgEnum("push_platform", ["ios", "android", "web"]);
+export const walletTransactionTypeEnum = pgEnum("wallet_transaction_type", ["credit", "debit"]);
+export const walletTransactionStatusEnum = pgEnum("wallet_transaction_status", ["pending", "completed", "failed"]);
 export const creatorTierEnum = pgEnum("creator_tier", ["nano", "micro", "mid", "macro", "mega"]);
 export const kycStatusEnum = pgEnum("kyc_status", ["none", "pending", "verified", "rejected"]);
 export const eventKindEnum = pgEnum("event_kind", ["event", "perk", "news"]);
@@ -477,6 +506,31 @@ export const brands = pgTable("brands", {
   industry: text("industry").notNull(),
   description: text("description"),
   contact_email: text("contact_email"),
+  wallet_balance_paise: integer("wallet_balance_paise").notNull().default(0),
+  created_at: text("created_at").notNull(),
+});
+
+export const wallet_transactions = pgTable("wallet_transactions", {
+  id: text("id").primaryKey(),
+  brand_id: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
+  type: walletTransactionTypeEnum("type").notNull(),
+  amount_paise: integer("amount_paise").notNull(),
+  description: text("description").notNull(),
+  razorpay_order_id: text("razorpay_order_id"),
+  razorpay_payment_id: text("razorpay_payment_id"),
+  status: walletTransactionStatusEnum("status").notNull().default("pending"),
+  created_at: text("created_at").notNull(),
+});
+
+export const invoices = pgTable("invoices", {
+  id: text("id").primaryKey(),
+  brand_id: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
+  invoice_number: text("invoice_number").notNull(),
+  amount_paise: integer("amount_paise").notNull(),
+  gst_paise: integer("gst_paise").notNull().default(0),
+  total_paise: integer("total_paise").notNull(),
+  pdf_url: text("pdf_url"),
+  issued_at: text("issued_at").notNull(),
   created_at: text("created_at").notNull(),
 });
 
