@@ -15,3 +15,4 @@
 | S11 | 4.3-4.5 | Messaging + Team + Settings | 1 day | done |
 | S12 | 4.5.1-4.5.2 | Admin Brand-Parity + Impersonation | 1 day | done |
 | S13 | 4.5.3-4.5.5 | Admin Overrides + Global Views + Role Splits | 1 day | done |
+| S14 | 5.1-5.3 | Expo Scaffold + Auth + API Client | 1 day | done |
