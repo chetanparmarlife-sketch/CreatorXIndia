@@ -4,6 +4,9 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react()],
+  css: {
+    postcss: path.resolve(import.meta.dirname),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
