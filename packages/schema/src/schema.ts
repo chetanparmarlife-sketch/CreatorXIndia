@@ -2,8 +2,8 @@
  * CreatorX — Shared schema
  *
  * This is the single source of truth for data shapes used by both the
- * in-memory mock backend and (eventually) Supabase. The SQL migration in
- * /supabase/migration.sql mirrors these tables exactly.
+ * in-memory mock backend and Supabase. Drizzle-generated SQL migrations in
+ * /supabase/migrations mirror these tables exactly.
  */
 
 import { sql } from "drizzle-orm";

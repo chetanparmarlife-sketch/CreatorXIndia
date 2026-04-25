@@ -1,7 +1,7 @@
 import type {
   Profile, SocialAccount, Brand, Campaign, Application, Deliverable,
   MessageThread, Message, Transaction, Withdrawal, CommunityItem, Notification, AuditLog,
-} from "@creatorx/schema";
+} from "@creatorx/schema/server";
 import {
   audit_log as auditLogTable,
   applications as applicationsTable,
@@ -18,7 +18,7 @@ import {
   social_accounts as socialAccountsTable,
   transactions as transactionsTable,
   withdrawals as withdrawalsTable,
-} from "@creatorx/schema";
+} from "@creatorx/schema/server";
 import { sql } from "drizzle-orm";
 
 const img = (id: string, w = 400, h = 400) =>

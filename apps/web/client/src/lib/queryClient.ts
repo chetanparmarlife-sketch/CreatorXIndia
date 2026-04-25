@@ -6,7 +6,6 @@ type UnauthorizedBehavior = "returnNull" | "throw";
 
 type AuthBridge = {
   getAccessToken: () => string | null;
-  getUserId: () => string | null;
   refreshAccessToken: () => Promise<string | null>;
   logout: () => Promise<void> | void;
 };
@@ -17,7 +16,6 @@ type ActingBrandBridge = {
 
 let authBridge: AuthBridge = {
   getAccessToken: () => null,
-  getUserId: () => null,
   refreshAccessToken: async () => null,
   logout: () => {},
 };
@@ -45,12 +43,10 @@ export function setActingBrandBridge(next: Partial<ActingBrandBridge>) {
 
 function authHeaders(accessTokenOverride?: string | null): Record<string, string> {
   const token = accessTokenOverride ?? authBridge.getAccessToken();
-  const userId = authBridge.getUserId();
   const actingBrandId = actingBrandBridge.getActingBrandId();
 
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (userId) headers["X-User-Id"] = userId;
   if (actingBrandId) headers["X-Acting-As-Brand"] = actingBrandId;
   return headers;
 }

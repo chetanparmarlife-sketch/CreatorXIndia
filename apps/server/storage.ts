@@ -51,7 +51,7 @@ import {
   transactions as transactionsTable,
   wallet_transactions as walletTransactionsTable,
   withdrawals as withdrawalsTable,
-} from "@creatorx/schema";
+} from "@creatorx/schema/server";
 import { seed } from "./seed";
 import { getAuditContext } from "./middleware/impersonate";
 
@@ -81,7 +81,7 @@ function redactPII(input: unknown): unknown {
   if (input && typeof input === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input)) {
-      if (/(email|phone|pan)/i.test(k)) {
+      if (/(email|phone|pan|aadhaar_last4|upi_id|bank_account|ifsc|gstin)/i.test(k)) {
         out[k] = "[REDACTED]";
       } else {
         out[k] = redactPII(v);
@@ -1044,7 +1044,7 @@ export async function inviteTeamMember(
     email: normalizedEmail,
     role,
   });
-  console.log(`[team] Invite sent to ${normalizedEmail} for brand ${brandId} as ${role}`);
+  console.log(`[team] Invite sent for brand ${brandId} as ${role}`);
   return row;
 }
 
@@ -1421,6 +1421,10 @@ export async function updateDeliverableStatus(
   rejectionReason?: string,
 ): Promise<Deliverable | null> {
   await ensureSeeded();
+  const current = await deliverables.byId(deliverableId);
+  if (!current) return null;
+  if (current.status === "approved" && status === "approved") return current;
+  if (current.status !== "pending" && current.status !== "submitted") return current;
   return deliverables.decide(deliverableId, status, rejectionReason ?? "", userId);
 }
 
@@ -2420,9 +2424,14 @@ export async function adminUpdateDeliverableStatus(
   rejectionReason: string | undefined,
   actorUserId: string,
 ): Promise<Deliverable | null> {
+  await ensureSeeded();
   if (status === "rejected" && !rejectionReason) {
     throw new Error("rejection_reason is required when rejecting");
   }
+  const current = await deliverables.byId(deliverableId);
+  if (!current) return null;
+  if (current.status === "approved" && status === "approved") return current;
+  if (current.status !== "pending" && current.status !== "submitted") return current;
   const row = await deliverables.decide(deliverableId, status, rejectionReason ?? "", actorUserId);
   if (!row) return null;
   await writeAudit(actorUserId, "admin_override_deliverable_status", "deliverable", deliverableId, {
@@ -2740,6 +2749,14 @@ export const deliverables = {
     const current = await deliverables.byId(id);
     if (!current) return null;
 
+    if (current.status === "approved" && status === "approved") {
+      return current;
+    }
+
+    if (current.status !== "pending" && current.status !== "submitted") {
+      return current;
+    }
+
     let approvedCampaign: Campaign | null = null;
     let perItem = 0;
 
@@ -2750,30 +2767,81 @@ export const deliverables = {
       }
       const totalDeliverables = approvedCampaign.deliverables.reduce((sum, item) => sum + item.qty, 0) || 1;
       perItem = Math.round(approvedCampaign.base_earning_cents / totalDeliverables);
-      await debitWalletBalance(approvedCampaign.brand_id, perItem, `${approvedCampaign.title} — ${current.kind}`);
     }
 
-    const [d] = await db
-      .update(deliverablesTable)
-      .set({ status, feedback, decided_at: now() })
-      .where(eq(deliverablesTable.id, id))
-      .returning();
+    const decidedAt = now();
+    const d = await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(deliverablesTable)
+        .set({ status, feedback, decided_at: decidedAt })
+        .where(
+          and(
+            eq(deliverablesTable.id, id),
+            inArray(deliverablesTable.status, ["pending", "submitted"]),
+          ),
+        )
+        .returning();
 
-    if (!d) return null;
+      if (!updated) return null;
+
+      if (status === "approved") {
+        const c = approvedCampaign;
+        if (!c) {
+          throw new Error("Campaign not found");
+        }
+
+        const [debitedBrand] = await tx
+          .update(brandsTable)
+          .set({
+            wallet_balance_paise: sql`${brandsTable.wallet_balance_paise} - ${perItem}`,
+          })
+          .where(
+            and(
+              eq(brandsTable.id, c.brand_id),
+              sql`${brandsTable.wallet_balance_paise} >= ${perItem}`,
+            ),
+          )
+          .returning();
+
+        if (!debitedBrand) {
+          throw new Error("Insufficient wallet balance");
+        }
+
+        const createdAt = now();
+        await tx.insert(walletTransactionsTable).values({
+          id: newId(),
+          brand_id: c.brand_id,
+          type: "debit",
+          amount_paise: perItem,
+          description: `${c.title} — ${current.kind}`,
+          razorpay_order_id: null,
+          razorpay_payment_id: null,
+          status: "completed",
+          created_at: createdAt,
+        });
+
+        await tx.insert(transactionsTable).values({
+          id: newId(),
+          user_id: updated.creator_id,
+          kind: "earning",
+          status: "completed",
+          amount_cents: perItem,
+          description: `${c.title} — ${updated.kind}`,
+          reference_id: updated.campaign_id,
+          created_at: createdAt,
+        });
+      }
+
+      return updated;
+    });
+
+    if (!d) return deliverables.byId(id);
 
     if (status === "approved") {
       const c = approvedCampaign;
       if (!c) {
         throw new Error("Campaign not found");
       }
-
-      await transactions.create(d.creator_id, {
-        kind: "earning",
-        status: "completed",
-        amount_cents: perItem,
-        description: `${c.title} — ${d.kind}`,
-        reference_id: d.campaign_id,
-      });
 
       const formatted = "₹" + (perItem / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 });
       await notifications.push(d.creator_id, {

@@ -22,13 +22,13 @@ function assertR2Config(): void {
   }
 }
 
-export async function getUploadUrl(key: string, contentType: string): Promise<string> {
+export async function getUploadUrl(key: string, contentType?: string): Promise<string> {
   assertR2Config();
 
   const command = new PutObjectCommand({
     Bucket: r2BucketName,
     Key: key,
-    ContentType: contentType,
+    ...(contentType ? { ContentType: contentType } : {}),
   });
 
   return getSignedUrl(r2Client, command, { expiresIn: 15 * 60 });

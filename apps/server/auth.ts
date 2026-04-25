@@ -2,8 +2,8 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import type { Profile, UserRole } from "@creatorx/schema";
-import { audit_log, db, otp_codes, profiles, refresh_tokens } from "@creatorx/schema";
+import type { Profile, UserRole } from "@creatorx/schema/server";
+import { audit_log, db, otp_codes, profiles, refresh_tokens } from "@creatorx/schema/server";
 
 export type AccessTokenRole =
   | "creator"
@@ -74,7 +74,9 @@ function redactAuthDiff(diff: unknown): Record<string, unknown> | null {
     if (value && typeof value === "object") {
       const obj: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
-        obj[k] = /(email|phone|pan)/i.test(k) ? "[REDACTED]" : redact(v);
+        obj[k] = /(email|phone|pan|aadhaar_last4|upi_id|bank_account|ifsc|gstin)/i.test(k)
+          ? "[REDACTED]"
+          : redact(v);
       }
       return obj;
     }

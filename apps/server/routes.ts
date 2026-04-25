@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { and, eq, sql } from "drizzle-orm";
 import {
   profiles, socials, brands, campaigns, applications, deliverables,
   messages, transactions, withdrawals, community, notifications, audit, analytics,
@@ -9,8 +9,7 @@ import {
   getBrandDashboardStats, getBrandActivity, createCampaign, getBrandCampaigns,
   getCampaign, getCampaignStats, updateCampaignStatus, getCampaignApplications,
   updateApplicationStatus, getCampaignDeliverables, updateDeliverableStatus,
-  createWalletTransaction, updateWalletTransaction, creditWalletBalance,
-  createInvoice, getWalletSummary, getBrandInvoices, searchCreators,
+  createWalletTransaction, getWalletSummary, getBrandInvoices, searchCreators,
   getCreatorProfile, getCreatorStats, getCreatorPortfolio, inviteCreatorToCampaign,
   getBrandThreads, getThreadMessages, createMessage, createOrGetThread,
   getBrandTeam, inviteTeamMember, removeTeamMember, updateNotificationPreferences,
@@ -26,10 +25,13 @@ import {
   type Campaign,
   type Application,
   type Deliverable,
+} from "@creatorx/schema";
+import {
   db,
+  brands as brandsTable,
   invoices as invoicesTable,
   wallet_transactions as walletTransactionsTable,
-} from "@creatorx/schema";
+} from "@creatorx/schema/server";
 import { z } from "zod";
 import {
   AuthError,
@@ -43,7 +45,7 @@ import {
 } from "./auth";
 import { requireAuth, requireRole } from "./middleware/auth";
 import { impersonate } from "./middleware/impersonate";
-import { getPublicUrl, getUploadUrl } from "./lib/r2";
+import { avatarKey, deliverableKey, getPublicUrl, getUploadUrl, kycKey } from "./lib/r2";
 import { createOrder, verifyWebhookSignature } from "./lib/razorpay";
 import { calculateGst, generateInvoiceNumber } from "./lib/invoice";
 
@@ -204,8 +206,12 @@ function verifyRazorpayPaymentSignature(orderId: string, paymentId: string, sign
 
 function getUserId(req: Request): string | null {
   if (req.user?.id) return req.user.id;
-  const uid = (req.headers["x-user-id"] as string) || "";
-  return uid || null;
+  return null;
+}
+
+function routeParam(req: Request, key: string): string {
+  const value = req.params[key];
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 async function requireUser(req: Request, res: Response): Promise<string | null> {
@@ -248,7 +254,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     (req, res, next) => requireAuth(req, res, () => impersonate(req, res, next)),
     requireRole("admin_ops", "admin_support", "admin_finance", "admin_readonly"),
   );
-  app.use("/api/creator", requireAuth, requireRole("creator"));
+  app.use("/api/profile", requireAuth, requireRole("creator"));
+  app.use("/api/socials", requireAuth, requireRole("creator"));
+  app.use("/api/my", requireAuth, requireRole("creator"));
+  app.use("/api/threads", requireAuth, requireRole("creator"));
+  app.use("/api/earnings", requireAuth, requireRole("creator"));
+  app.use("/api/withdrawals", requireAuth, requireRole("creator"));
+  app.use("/api/kyc", requireAuth, requireRole("creator"));
+  app.use("/api/payout-instruments", requireAuth, requireRole("creator"));
+  app.use("/api/notifications", requireAuth, requireRole("creator"));
   app.use("/api/brand", (req, res, next) => {
     if (req.path === "/wallet/webhook") {
       next();
@@ -289,10 +303,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const latest = list[list.length - 1];
       if (latest) await socials.toggle(latest.id, false);
     }
-    res.json({ profile: p });
+    const accessToken = signAccessToken(p.id, p.role);
+    const refreshToken = await signRefreshToken(p.id);
+    res.json({ profile: p, accessToken, refreshToken });
   });
 
-  app.get("/api/auth/me", async (req, res) => {
+  app.get("/api/auth/me", requireAuth, async (req, res) => {
     const uid = getUserId(req);
     if (!uid) return res.json({ profile: null });
     const p = await profiles.byId(uid);
@@ -318,8 +334,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     try {
-      const otp = await generateOtp(email);
-      console.log(`[auth] OTP for ${email}: ${otp}`);
+      await generateOtp(email);
+      console.log("OTP sent to:", email);
       return res.json({ ok: true });
     } catch (error) {
       if (error instanceof AuthError) {
@@ -471,7 +487,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/socials/:id/toggle", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
     const { connected } = req.body || {};
-    const s = await socials.toggle(req.params.id, !!connected);
+    const s = await socials.toggle(routeParam(req, "id"), !!connected);
     if (!s || s.user_id !== uid) return res.status(404).json({ error: "Not found" });
     res.json({ social: s });
   });
@@ -493,8 +509,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ campaigns: out });
   });
 
-  app.get("/api/campaigns/:id", async (req, res) => {
-    const c = await campaigns.byId(req.params.id);
+  app.get("/api/campaigns/:id", requireAuth, requireRole("creator"), async (req, res) => {
+    const c = await campaigns.byId(routeParam(req, "id"));
     if (!c) return res.status(404).json({ error: "Not found" });
     const uid = getUserId(req);
     const myApp = uid ? (await applications.list({ creator_id: uid, campaign_id: c.id }))[0] : null;
@@ -506,9 +522,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  app.post("/api/campaigns/:id/apply", async (req, res) => {
+  app.post("/api/campaigns/:id/apply", requireAuth, requireRole("creator"), async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const c = await campaigns.byId(req.params.id);
+    const c = await campaigns.byId(routeParam(req, "id"));
     if (!c) return res.status(404).json({ error: "Campaign not found" });
     if (c.status !== "open") return res.status(400).json({ error: "Campaign closed" });
     const existing = (await applications.list({ creator_id: uid, campaign_id: c.id }))[0];
@@ -526,9 +542,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Eligibility check (used by discover / detail page)
-  app.get("/api/campaigns/:id/eligibility", async (req, res) => {
+  app.get("/api/campaigns/:id/eligibility", requireAuth, requireRole("creator"), async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    res.json(await eligibility.check(uid, req.params.id));
+    res.json(await eligibility.check(uid, routeParam(req, "id")));
   });
 
   // ------------------------------------------------------------------
@@ -553,14 +569,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/my/deliverables/:id", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const d = await deliverables.byId(req.params.id);
+    const d = await deliverables.byId(routeParam(req, "id"));
     if (!d || d.creator_id !== uid) return res.status(404).json({ error: "Not found" });
     res.json({ deliverable: d });
   });
 
   app.post("/api/my/deliverables/:id/submit", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const d = await deliverables.byId(req.params.id);
+    const d = await deliverables.byId(routeParam(req, "id"));
     if (!d || d.creator_id !== uid) return res.status(404).json({ error: "Not found" });
     const { asset_url, caption } = req.body || {};
     if (!asset_url || typeof asset_url !== "string" || !/^https?:\/\/.+/.test(asset_url)) {
@@ -572,7 +588,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/my/deliverables/:id/live", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const d = await deliverables.byId(req.params.id);
+    const d = await deliverables.byId(routeParam(req, "id"));
     if (!d || d.creator_id !== uid) return res.status(404).json({ error: "Not found" });
     const { live_url } = req.body || {};
     if (!live_url || typeof live_url !== "string" || !/^https?:\/\/.+/.test(live_url)) {
@@ -600,7 +616,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/threads/:id", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const t = await messages.thread(req.params.id);
+    const t = await messages.thread(routeParam(req, "id"));
     if (!t || t.creator_id !== uid) return res.status(404).json({ error: "Not found" });
     const msgs = await messages.listMessages(t.id);
     res.json({
@@ -611,7 +627,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/threads/:id/read", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const t = await messages.thread(req.params.id);
+    const t = await messages.thread(routeParam(req, "id"));
     if (!t || t.creator_id !== uid) return res.status(404).json({ error: "Not found" });
     await messages.markRead(t.id);
     res.json({ ok: true });
@@ -619,7 +635,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/threads/:id/send", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const t = await messages.thread(req.params.id);
+    const t = await messages.thread(routeParam(req, "id"));
     if (!t || t.creator_id !== uid) return res.status(404).json({ error: "Not found" });
     const { body, attachment } = req.body || {};
     const msg = await messages.send(t.id, uid, "creator", body || "", attachment);
@@ -767,7 +783,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/notifications/:id/read", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    await notifications.markRead(req.params.id);
+    await notifications.markRead(routeParam(req, "id"));
     res.json({ ok: true });
   });
 
@@ -793,9 +809,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ items });
   });
 
-  app.post("/api/community/:id/rsvp", async (req, res) => {
+  app.post("/api/community/:id/rsvp", requireAuth, requireRole("creator"), async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
-    const c = await community.register(req.params.id);
+    const c = await community.register(routeParam(req, "id"));
     res.json({ item: c });
   });
 
@@ -829,7 +845,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/admin/creators/:id", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const p = await profiles.byId(req.params.id);
+    const p = await profiles.byId(routeParam(req, "id"));
     if (!p) return res.status(404).json({ error: "Not found" });
     const userTransactions = await transactions.forUser(p.id);
     res.json({
@@ -842,26 +858,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  app.patch("/api/admin/creators/:id", async (req, res) => {
+  app.patch("/api/admin/creators/:id", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const updated = await profiles.update(req.params.id, req.body);
-    await audit.log(uid, "update_creator", "creator", req.params.id, req.body);
+    const creatorId = routeParam(req, "id");
+    const updated = await profiles.update(creatorId, req.body);
+    await audit.log(uid, "update_creator", "creator", creatorId, req.body);
     res.json({ creator: updated });
   });
 
-  app.post("/api/admin/creators/:id/verify", async (req, res) => {
+  app.post("/api/admin/creators/:id/verify", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { verified } = req.body || {};
-    const updated = await profiles.update(req.params.id, { verified_pro: !!verified });
-    await audit.log(uid, verified ? "verify_creator" : "unverify_creator", "creator", req.params.id);
+    const creatorId = routeParam(req, "id");
+    const updated = await profiles.update(creatorId, { verified_pro: !!verified });
+    await audit.log(uid, verified ? "verify_creator" : "unverify_creator", "creator", creatorId);
     res.json({ creator: updated });
   });
 
-  app.post("/api/admin/creators/:id/suspend", async (req, res) => {
+  app.post("/api/admin/creators/:id/suspend", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { suspended } = req.body || {};
-    const updated = await profiles.update(req.params.id, { suspended: !!suspended });
-    await audit.log(uid, suspended ? "suspend_creator" : "unsuspend_creator", "creator", req.params.id);
+    const creatorId = routeParam(req, "id");
+    const updated = await profiles.update(creatorId, { suspended: !!suspended });
+    await audit.log(uid, suspended ? "suspend_creator" : "unsuspend_creator", "creator", creatorId);
     res.json({ creator: updated });
   });
 
@@ -878,30 +897,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
     }
 
-    const brandId = typeof req.params.brandId === "string" ? req.params.brandId : "";
+    const brandId = routeParam(req, "brandId");
     const brand = await updateBrandStatus(brandId, parsed.data.status, parsed.data.reason, uid);
     if (!brand) return res.status(404).json({ error: "Brand not found" });
     return res.json({ brand });
   });
 
-  app.post("/api/admin/brands", async (req, res) => {
+  app.post("/api/admin/brands", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const b = await brands.create(req.body);
     await audit.log(uid, "create_brand", "brand", b.id);
     res.json({ brand: b });
   });
 
-  app.patch("/api/admin/brands/:id", async (req, res) => {
+  app.patch("/api/admin/brands/:id", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const b = await brands.update(req.params.id, req.body);
-    await audit.log(uid, "update_brand", "brand", req.params.id);
+    const brandId = routeParam(req, "id");
+    const b = await brands.update(brandId, req.body);
+    await audit.log(uid, "update_brand", "brand", brandId);
     res.json({ brand: b });
   });
 
-  app.delete("/api/admin/brands/:id", async (req, res) => {
+  app.delete("/api/admin/brands/:id", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    await brands.remove(req.params.id);
-    await audit.log(uid, "delete_brand", "brand", req.params.id);
+    const brandId = routeParam(req, "id");
+    await brands.remove(brandId);
+    await audit.log(uid, "delete_brand", "brand", brandId);
     res.json({ ok: true });
   });
 
@@ -921,7 +942,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     try {
-      const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+      const campaignId = routeParam(req, "id");
       const campaign = await adminUpdateCampaignStatus(campaignId, parsed.data.status, uid);
       if (!campaign) return res.status(404).json({ error: "Campaign not found" });
       return res.json({ campaign });
@@ -931,24 +952,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/admin/campaigns", async (req, res) => {
+  app.post("/api/admin/campaigns", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const c = await campaigns.create(req.body);
     await audit.log(uid, "create_campaign", "campaign", c.id);
     res.json({ campaign: c });
   });
 
-  app.patch("/api/admin/campaigns/:id", async (req, res) => {
+  app.patch("/api/admin/campaigns/:id", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const c = await campaigns.update(req.params.id, req.body);
-    await audit.log(uid, "update_campaign", "campaign", req.params.id);
+    const campaignId = routeParam(req, "id");
+    const c = await campaigns.update(campaignId, req.body);
+    await audit.log(uid, "update_campaign", "campaign", campaignId);
     res.json({ campaign: c });
   });
 
-  app.delete("/api/admin/campaigns/:id", async (req, res) => {
+  app.delete("/api/admin/campaigns/:id", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    await campaigns.remove(req.params.id);
-    await audit.log(uid, "delete_campaign", "campaign", req.params.id);
+    const campaignId = routeParam(req, "id");
+    await campaigns.remove(campaignId);
+    await audit.log(uid, "delete_campaign", "campaign", campaignId);
     res.json({ ok: true });
   });
 
@@ -965,18 +988,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
     }
 
-    const applicationId = typeof req.params.id === "string" ? req.params.id : "";
+    const applicationId = routeParam(req, "id");
     const application = await adminUpdateApplicationStatus(applicationId, parsed.data.status, uid);
     if (!application) return res.status(404).json({ error: "Application not found" });
     return res.json({ application });
   });
 
-  app.post("/api/admin/applications/:id/decide", async (req, res) => {
+  app.post("/api/admin/applications/:id/decide", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { decision } = req.body || {};
     if (!["accepted", "rejected"].includes(decision)) return res.status(400).json({ error: "bad decision" });
-    const a = await applications.decide(req.params.id, decision, uid);
-    await audit.log(uid, decision === "accepted" ? "accept_application" : "reject_application", "application", req.params.id);
+    const applicationId = routeParam(req, "id");
+    const a = await applications.decide(applicationId, decision, uid);
+    await audit.log(uid, decision === "accepted" ? "accept_application" : "reject_application", "application", applicationId);
     res.json({ application: a });
   });
 
@@ -994,7 +1018,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     try {
-      const deliverableId = typeof req.params.id === "string" ? req.params.id : "";
+      const deliverableId = routeParam(req, "id");
       const deliverable = await adminUpdateDeliverableStatus(
         deliverableId,
         parsed.data.status,
@@ -1009,12 +1033,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/admin/deliverables/:id/decide", async (req, res) => {
+  app.post("/api/admin/deliverables/:id/decide", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { decision, feedback } = req.body || {};
     if (!["approved", "revision", "rejected"].includes(decision)) return res.status(400).json({ error: "bad decision" });
-    const d = await deliverables.decide(req.params.id, decision, feedback || "", uid);
-    await audit.log(uid, `${decision}_deliverable`, "deliverable", req.params.id, { feedback });
+    const deliverableId = routeParam(req, "id");
+    const d = await deliverables.decide(deliverableId, decision, feedback || "", uid);
+    await audit.log(uid, `${decision}_deliverable`, "deliverable", deliverableId, { feedback });
     res.json({ deliverable: d });
   });
 
@@ -1028,12 +1053,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ payouts: enriched });
   });
 
-  app.post("/api/admin/payouts/:id/decide", async (req, res) => {
+  app.post("/api/admin/payouts/:id/decide", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { decision, note, utr } = req.body || {};
     if (!["approved", "paid", "rejected"].includes(decision)) return res.status(400).json({ error: "bad decision" });
-    const w = await withdrawals.decide(req.params.id, decision, uid, note, utr);
-    await audit.log(uid, `${decision}_payout`, "withdrawal", req.params.id, { note, utr });
+    const withdrawalId = routeParam(req, "id");
+    const w = await withdrawals.decide(withdrawalId, decision, uid, note, utr);
+    await audit.log(uid, `${decision}_payout`, "withdrawal", withdrawalId, { note, utr });
     res.json({ withdrawal: w });
   });
 
@@ -1046,12 +1072,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ creators: list });
   });
 
-  app.post("/api/admin/kyc/:userId/decide", async (req, res) => {
+  app.post("/api/admin/kyc/:userId/decide", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { decision, reason } = req.body || {};
     if (!["verified", "rejected"].includes(decision)) return res.status(400).json({ error: "bad decision" });
-    const p = await profiles.decideKyc(req.params.userId, decision, reason || null);
-    await audit.log(uid, `${decision}_kyc`, "creator", req.params.userId, { reason });
+    const creatorId = routeParam(req, "userId");
+    const p = await profiles.decideKyc(creatorId, decision, reason || null);
+    await audit.log(uid, `${decision}_kyc`, "creator", creatorId, { reason });
     res.json({ creator: p });
   });
 
@@ -1072,11 +1099,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ handles: list });
   });
 
-  app.post("/api/admin/handles/:id/verify", async (req, res) => {
+  app.post("/api/admin/handles/:id/verify", requireRole("admin_ops", "admin_support"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const { note } = req.body || {};
-    const s = await profiles.verifyHandle(req.params.id, note || null);
-    await audit.log(uid, "verify_handle", "social", req.params.id, { note });
+    const socialId = routeParam(req, "id");
+    const s = await profiles.verifyHandle(socialId, note || null);
+    await audit.log(uid, "verify_handle", "social", socialId, { note });
     res.json({ social: s });
   });
 
@@ -1086,24 +1114,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ items: await community.list() });
   });
 
-  app.post("/api/admin/community", async (req, res) => {
+  app.post("/api/admin/community", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     const c = await community.create(req.body);
     await audit.log(uid, "create_community", "community", c.id);
     res.json({ item: c });
   });
 
-  app.patch("/api/admin/community/:id", async (req, res) => {
+  app.patch("/api/admin/community/:id", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const c = await community.update(req.params.id, req.body);
-    await audit.log(uid, "update_community", "community", req.params.id);
+    const itemId = routeParam(req, "id");
+    const c = await community.update(itemId, req.body);
+    await audit.log(uid, "update_community", "community", itemId);
     res.json({ item: c });
   });
 
-  app.delete("/api/admin/community/:id", async (req, res) => {
+  app.delete("/api/admin/community/:id", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    await community.remove(req.params.id);
-    await audit.log(uid, "delete_community", "community", req.params.id);
+    const itemId = routeParam(req, "id");
+    await community.remove(itemId);
+    await audit.log(uid, "delete_community", "community", itemId);
     res.json({ ok: true });
   });
 
@@ -1136,7 +1166,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Danger: reset demo data
-  app.post("/api/admin/reset", async (req, res) => {
+  app.post("/api/admin/reset", requireRole("admin_ops"), async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
     await resetDb();
     res.json({ ok: true });
@@ -1149,19 +1179,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-    const { key, contentType } = req.body || {};
-    if (typeof key !== "string" || typeof contentType !== "string" || !key || !contentType) {
-      return res.status(400).json({ error: "key and contentType are required" });
+    const { type, filename, campaignId } = req.body || {};
+    if (
+      type !== "avatar" &&
+      type !== "deliverable" &&
+      type !== "kyc"
+    ) {
+      return res.status(400).json({ error: "type must be avatar, deliverable, or kyc" });
     }
 
-    if (!(key.startsWith("avatars/") || key.startsWith("deliverables/") || key.startsWith("kyc/"))) {
-      return res.status(400).json({ error: "Invalid key prefix" });
+    if (typeof filename !== "string" || filename.trim().length === 0) {
+      return res.status(400).json({ error: "filename is required" });
+    }
+
+    let key: string;
+    if (type === "avatar") {
+      key = avatarKey(user.id, filename);
+    } else if (type === "deliverable") {
+      if (typeof campaignId !== "string" || campaignId.trim().length === 0) {
+        return res.status(400).json({ error: "campaignId is required for deliverable uploads" });
+      }
+      key = deliverableKey(campaignId, user.id, filename);
+    } else {
+      key = kycKey(user.id, filename);
     }
 
     try {
-      const uploadUrl = await getUploadUrl(key, contentType);
-      const publicUrl = getPublicUrl(key);
-      return res.json({ uploadUrl, publicUrl });
+      const uploadUrl = await getUploadUrl(key);
+      if (type === "kyc") {
+        return res.json({ uploadUrl });
+      }
+      return res.json({ uploadUrl, publicUrl: getPublicUrl(key) });
     } catch {
       return res.status(500).json({ error: "Failed to create upload URL" });
     }
@@ -1268,7 +1316,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/brand/campaigns/:id", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    const campaignId = routeParam(req, "id");
     if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
 
     const campaign = await getCampaign(user.id, campaignId);
@@ -1303,7 +1351,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/brand/campaigns/:id/stats", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    const campaignId = routeParam(req, "id");
     if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
 
     const stats = await getCampaignStats(user.id, campaignId);
@@ -1319,7 +1367,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/brand/campaigns/:id/status", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    const campaignId = routeParam(req, "id");
     if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
 
     const parsed = campaignStatusUpdateSchema.safeParse(req.body ?? {});
@@ -1356,7 +1404,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/brand/campaigns/:id/applications", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    const campaignId = routeParam(req, "id");
     if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
 
     const campaign = await campaigns.byId(campaignId);
@@ -1380,7 +1428,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/brand/applications/:applicationId/status", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const applicationId = typeof req.params.applicationId === "string" ? req.params.applicationId : "";
+    const applicationId = routeParam(req, "applicationId");
     if (!applicationId) return res.status(400).json({ error: "Invalid application id" });
 
     const parsed = brandApplicationStatusUpdateSchema.safeParse(req.body ?? {});
@@ -1413,7 +1461,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/brand/campaigns/:id/deliverables", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+    const campaignId = routeParam(req, "id");
     if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
 
     const campaign = await campaigns.byId(campaignId);
@@ -1437,7 +1485,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/brand/deliverables/:deliverableId/status", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const deliverableId = typeof req.params.deliverableId === "string" ? req.params.deliverableId : "";
+    const deliverableId = routeParam(req, "deliverableId");
     if (!deliverableId) return res.status(400).json({ error: "Invalid deliverable id" });
 
     const parsed = brandDeliverableStatusUpdateSchema.safeParse(req.body ?? {});
@@ -1515,7 +1563,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/brand/creators/:creatorId", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const creatorId = typeof req.params.creatorId === "string" ? req.params.creatorId : "";
+    const creatorId = routeParam(req, "creatorId");
     if (!creatorId) return res.status(400).json({ error: "Invalid creator id" });
 
     const profile = await getCreatorProfile(creatorId);
@@ -1532,7 +1580,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/brand/campaigns/:campaignId/invite", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const campaignId = typeof req.params.campaignId === "string" ? req.params.campaignId : "";
+    const campaignId = routeParam(req, "campaignId");
     if (!campaignId) return res.status(400).json({ error: "Invalid campaign id" });
 
     const parsed = brandInviteSchema.safeParse(req.body ?? {});
@@ -1558,7 +1606,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     brandId: string,
     razorpayOrderId: string,
     razorpayPaymentId: string,
-  ): Promise<{ newBalancePaise: number; invoiceNumber: string }> {
+  ): Promise<{ newBalancePaise: number; invoiceNumber: string; processed: boolean }> {
     const matchingTransactions = await db
       .select()
       .from(walletTransactionsTable)
@@ -1569,56 +1617,93 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       throw new Error("Wallet transaction not found");
     }
 
-    if (walletTransaction.status === "completed") {
+    if (walletTransaction.status !== "pending") {
       const summary = await getWalletSummary(brandId);
       const existingInvoices = await getBrandInvoices(brandId);
       return {
         newBalancePaise: summary.balancePaise,
         invoiceNumber: existingInvoices[0]?.invoice_number ?? "",
+        processed: false,
       };
-    }
-
-    await updateWalletTransaction(walletTransaction.id, {
-      status: "completed",
-      razorpay_payment_id: razorpayPaymentId,
-    });
-
-    const creditedBrand = await creditWalletBalance(brandId, walletTransaction.amount_paise);
-    if (!creditedBrand) {
-      throw new Error("Brand not found");
     }
 
     const profile = await profiles.byId(brandId);
     const hasGstin = Boolean(profile?.gstin);
-    const gstPaise = calculateGst(walletTransaction.amount_paise, hasGstin);
-    const totalPaise = walletTransaction.amount_paise + gstPaise;
+    const result = await db.transaction(async (tx) => {
+      const [lockedTransaction] = await tx
+        .update(walletTransactionsTable)
+        .set({
+          status: "completed",
+          razorpay_payment_id: razorpayPaymentId,
+        })
+        .where(
+          and(
+            eq(walletTransactionsTable.id, walletTransaction.id),
+            eq(walletTransactionsTable.status, "pending"),
+          ),
+        )
+        .returning();
 
-    const fyPrefix = generateInvoiceNumber(0).split("/").slice(0, 2).join("/");
-    const allInvoices = await db.select({ invoice_number: invoicesTable.invoice_number }).from(invoicesTable);
-    const fyCount = allInvoices.filter((invoice) => invoice.invoice_number.startsWith(`${fyPrefix}/`)).length;
-    const invoiceNumber = generateInvoiceNumber(fyCount);
+      if (!lockedTransaction) return null;
 
-    await createInvoice({
-      brand_id: brandId,
-      invoice_number: invoiceNumber,
-      amount_paise: walletTransaction.amount_paise,
-      gst_paise: gstPaise,
-      total_paise: totalPaise,
-      issued_at: new Date().toISOString(),
-      pdf_url: null,
+      const [creditedBrand] = await tx
+        .update(brandsTable)
+        .set({
+          wallet_balance_paise: sql`${brandsTable.wallet_balance_paise} + ${lockedTransaction.amount_paise}`,
+        })
+        .where(eq(brandsTable.id, brandId))
+        .returning();
+
+      if (!creditedBrand) {
+        throw new Error("Brand not found");
+      }
+
+      const gstPaise = calculateGst(lockedTransaction.amount_paise, hasGstin);
+      const totalPaise = lockedTransaction.amount_paise + gstPaise;
+      const fyPrefix = generateInvoiceNumber(0).split("/").slice(0, 2).join("/");
+      const allInvoices = await tx.select({ invoice_number: invoicesTable.invoice_number }).from(invoicesTable);
+      const fyCount = allInvoices.filter((invoice) => invoice.invoice_number.startsWith(`${fyPrefix}/`)).length;
+      const invoiceNumber = generateInvoiceNumber(fyCount);
+      const issuedAt = new Date().toISOString();
+
+      await tx.insert(invoicesTable).values({
+        id: randomUUID(),
+        brand_id: brandId,
+        invoice_number: invoiceNumber,
+        amount_paise: lockedTransaction.amount_paise,
+        gst_paise: gstPaise,
+        total_paise: totalPaise,
+        issued_at: issuedAt,
+        pdf_url: null,
+        created_at: issuedAt,
+      });
+
+      return {
+        newBalancePaise: creditedBrand.wallet_balance_paise,
+        invoiceNumber,
+      };
     });
+
+    if (!result) {
+      const summary = await getWalletSummary(brandId);
+      const existingInvoices = await getBrandInvoices(brandId);
+      return {
+        newBalancePaise: summary.balancePaise,
+        invoiceNumber: existingInvoices[0]?.invoice_number ?? "",
+        processed: false,
+      };
+    }
 
     await audit.log(brandId, "wallet_topup_completed", "wallet_transaction", walletTransaction.id, {
       razorpay_order_id: razorpayOrderId,
       razorpay_payment_id: razorpayPaymentId,
       amount_paise: walletTransaction.amount_paise,
-      gst_paise: gstPaise,
-      invoice_number: invoiceNumber,
+      invoice_number: result.invoiceNumber,
     });
 
     return {
-      newBalancePaise: creditedBrand.wallet_balance_paise,
-      invoiceNumber,
+      ...result,
+      processed: true,
     };
   }
 
@@ -1762,7 +1847,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/brand/threads/:threadId/messages", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const threadId = typeof req.params.threadId === "string" ? req.params.threadId : "";
+    const threadId = routeParam(req, "threadId");
     if (!threadId) return res.status(400).json({ error: "Invalid thread id" });
 
     try {
@@ -1780,7 +1865,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/brand/threads/:threadId/messages", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const threadId = typeof req.params.threadId === "string" ? req.params.threadId : "";
+    const threadId = routeParam(req, "threadId");
     if (!threadId) return res.status(400).json({ error: "Invalid thread id" });
 
     const parsed = brandThreadMessageSchema.safeParse(req.body ?? {});
@@ -1851,7 +1936,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/brand/team/:userId", requireAuth, requireRole("brand"), async (req, res) => {
     const user = req.user;
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const targetUserId = typeof req.params.userId === "string" ? req.params.userId : "";
+    const targetUserId = routeParam(req, "userId");
     if (!targetUserId) return res.status(400).json({ error: "Invalid user id" });
     if (targetUserId === user.id) {
       return res.status(400).json({ error: "Cannot remove self from team" });

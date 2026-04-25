@@ -135,7 +135,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signup = useCallback(async (data: { email: string; full_name: string; handle: string }) => {
     const res = await apiRequest("POST", "/api/auth/signup", data);
-    const json = (await res.json()) as { profile: Profile };
+    const json = (await res.json()) as { profile: Profile; accessToken?: string; refreshToken?: string };
+    setAccessToken(typeof json.accessToken === "string" ? json.accessToken : null);
+    refreshTokenRef.current = typeof json.refreshToken === "string" ? json.refreshToken : null;
+    userIdRef.current = json.profile.id;
     setUser(json.profile);
     queryClient.invalidateQueries();
     return json.profile;
@@ -157,7 +160,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAuthBridge({
       getAccessToken: () => accessToken,
-      getUserId: () => user?.id ?? userIdRef.current,
       refreshAccessToken: silentRefresh,
       logout,
     });

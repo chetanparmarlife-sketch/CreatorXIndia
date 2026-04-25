@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "pnpm --filter @creatorx/web dev",
     "build": "tsx script/build.ts",
-    "start": "NODE_ENV=production node apps/server/dist/index.cjs",
+    "start": "NODE_ENV=production node apps/server/dist/index.js",
     "check": "tsc --noEmit",
     "db:push": "drizzle-kit push"
   },

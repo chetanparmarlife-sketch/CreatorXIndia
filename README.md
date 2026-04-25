@@ -52,7 +52,7 @@ supabase/     Production migration + RLS policies (run when you wire Supabase)
 
 ### Data model
 
-See `shared/schema.ts` — one TypeScript interface per table. The Supabase migration in `supabase/migration.sql` mirrors these 1:1.
+See `packages/schema/src/schema.ts` — one TypeScript interface per table. The Supabase migrations in `supabase/migrations/` mirror these 1:1.
 
 ---
 
@@ -62,16 +62,7 @@ The mock backend was designed so the only file that changes is `server/storage.t
 
 ### 1. Run the migration
 
-In your Supabase project → **SQL editor** → paste `supabase/migration.sql` and run. Idempotent. Creates:
-
-- every table with matching columns + enums,
-- indexes on the obvious FKs and filters,
-- RLS policies:
-  - creators `SELECT` / `UPDATE` only their own rows,
-  - brands / campaigns / published community items readable to any authenticated user,
-  - admins bypass every policy via `public.is_admin()`,
-- an `on_auth_user_created` trigger that inserts a `profiles` row for every new `auth.users` signup,
-- a small seed of brands so the UI has something to show.
+In your Supabase project → **SQL editor** → run the Drizzle-generated SQL in `supabase/migrations/`. These migrations create the current tables, enums, defaults, and foreign keys from `packages/schema/src/schema.ts`.
 
 ### 2. Add env vars
 
@@ -167,7 +158,7 @@ server/
 shared/
   schema.ts                    # single source of truth
 supabase/
-  migration.sql                # tables + RLS + seed
+  migrations/                  # Drizzle-generated tables/enums/FKs
 ```
 
 ---

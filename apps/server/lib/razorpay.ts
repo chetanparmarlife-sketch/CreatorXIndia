@@ -5,14 +5,19 @@ const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "";
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET ?? "";
 
-if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
-  throw new Error("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set in environment");
-}
+let rzp: Razorpay | null = null;
 
-export const rzp = new Razorpay({
-  key_id: RAZORPAY_KEY_ID,
-  key_secret: RAZORPAY_KEY_SECRET,
-});
+function getRazorpayClient(): Razorpay {
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    throw new Error("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set in environment");
+  }
+
+  rzp ??= new Razorpay({
+    key_id: RAZORPAY_KEY_ID,
+    key_secret: RAZORPAY_KEY_SECRET,
+  });
+  return rzp;
+}
 
 export interface RazorpayOrder {
   id: string;
@@ -27,7 +32,7 @@ export async function createOrder(amountPaise: number, receipt: string): Promise
     throw new Error("UPI limit exceeded");
   }
 
-  const order = await rzp.orders.create({
+  const order = await getRazorpayClient().orders.create({
     amount: amountPaise,
     currency: "INR",
     receipt,

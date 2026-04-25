@@ -42,10 +42,9 @@ export default function BrandOnboardingPage() {
         throw new Error("Select a logo file first");
       }
 
-      const key = `avatars/brand/${user.id}/logo`;
       const presignRes = await apiRequest("POST", "/api/uploads/presign", {
-        key,
-        contentType: logoFile.type || "application/octet-stream",
+        type: "avatar",
+        filename: logoFile.name,
       });
 
       const { uploadUrl, publicUrl } = (await presignRes.json()) as {
