@@ -12,3 +12,4 @@
 | S08 | 3.6-3.7 | Brand Applications + Deliverables | 1 day | done |
 | S09 | 3.8 | Wallet + Razorpay + Invoices | 1 day | done |
 | S10 | 4.1-4.2 | Marketplace + Creator Profiles | 1 day | done |
+| S11 | 4.3-4.5 | Messaging + Team + Settings | 1 day | done |

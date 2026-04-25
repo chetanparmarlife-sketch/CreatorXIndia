@@ -12,6 +12,8 @@ import {
   createWalletTransaction, updateWalletTransaction, creditWalletBalance,
   createInvoice, getWalletSummary, getBrandInvoices, searchCreators,
   getCreatorProfile, getCreatorStats, getCreatorPortfolio, inviteCreatorToCampaign,
+  getBrandThreads, getThreadMessages, createMessage, createOrGetThread,
+  getBrandTeam, inviteTeamMember, removeTeamMember, updateNotificationPreferences,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -118,6 +120,24 @@ const walletVerifySchema = z.object({
   razorpay_order_id: z.string().trim().min(1, "razorpay_order_id is required"),
   razorpay_payment_id: z.string().trim().min(1, "razorpay_payment_id is required"),
   razorpay_signature: z.string().trim().min(1, "razorpay_signature is required"),
+});
+const brandThreadMessageSchema = z.object({
+  body: z.string().trim().min(1, "body is required").max(2000, "body must be at most 2000 characters"),
+});
+const brandThreadCreateSchema = z.object({
+  creatorId: z.string().trim().min(1, "creatorId is required"),
+  campaignId: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().trim().min(1).optional(),
+  ),
+  body: z.string().trim().min(1, "body is required").max(2000, "body must be at most 2000 characters"),
+});
+const brandTeamInviteSchema = z.object({
+  email: z.string().trim().email("email must be valid"),
+  role: z.enum(["admin", "member", "viewer"]),
+});
+const brandNotificationPreferencesSchema = z.object({
+  preferences: z.record(z.boolean()),
 });
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
@@ -1625,6 +1645,129 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const invoices = await getBrandInvoices(user.id);
     return res.json({ invoices });
+  });
+
+  app.get("/api/brand/threads", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const threads = await getBrandThreads(user.id);
+    return res.json({ threads });
+  });
+
+  app.get("/api/brand/threads/:threadId/messages", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const threadId = typeof req.params.threadId === "string" ? req.params.threadId : "";
+    if (!threadId) return res.status(400).json({ error: "Invalid thread id" });
+
+    try {
+      const data = await getThreadMessages(user.id, threadId);
+      if (!data) return res.status(404).json({ error: "Thread not found" });
+      return res.json(data);
+    } catch (error) {
+      if (error instanceof Error && error.message === "FORBIDDEN") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      return res.status(400).json({ error: "Could not fetch thread messages" });
+    }
+  });
+
+  app.post("/api/brand/threads/:threadId/messages", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const threadId = typeof req.params.threadId === "string" ? req.params.threadId : "";
+    if (!threadId) return res.status(400).json({ error: "Invalid thread id" });
+
+    const parsed = brandThreadMessageSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const message = await createMessage(user.id, threadId, parsed.data.body);
+      if (!message) return res.status(404).json({ error: "Thread not found" });
+      return res.json({ message });
+    } catch (error) {
+      if (error instanceof Error && error.message === "FORBIDDEN") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      return res.status(400).json({ error: "Could not send message" });
+    }
+  });
+
+  app.post("/api/brand/threads", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = brandThreadCreateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const created = await createOrGetThread(
+        user.id,
+        parsed.data.creatorId,
+        parsed.data.campaignId ?? null,
+        parsed.data.body,
+      );
+      return res.json(created);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "THREAD_CREATE_FAILED";
+      if (code === "FORBIDDEN") return res.status(403).json({ error: "Forbidden" });
+      if (code === "CREATOR_NOT_FOUND" || code === "CAMPAIGN_NOT_FOUND") {
+        return res.status(404).json({ error: "Creator or campaign not found" });
+      }
+      return res.status(400).json({ error: "Could not create thread" });
+    }
+  });
+
+  app.get("/api/brand/team", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const members = await getBrandTeam(user.id);
+    return res.json({ members });
+  });
+
+  app.post("/api/brand/team/invite", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = brandTeamInviteSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const member = await inviteTeamMember(user.id, user.id, parsed.data.email, parsed.data.role);
+    return res.json({ member });
+  });
+
+  app.delete("/api/brand/team/:userId", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const targetUserId = typeof req.params.userId === "string" ? req.params.userId : "";
+    if (!targetUserId) return res.status(400).json({ error: "Invalid user id" });
+    if (targetUserId === user.id) {
+      return res.status(400).json({ error: "Cannot remove self from team" });
+    }
+
+    await removeTeamMember(user.id, user.id, targetUserId);
+    return res.json({ ok: true });
+  });
+
+  app.patch("/api/brand/notification-preferences", requireAuth, requireRole("brand"), async (req, res) => {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const parsed = brandNotificationPreferencesSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const preferences = await updateNotificationPreferences(user.id, parsed.data.preferences);
+    return res.json({ preferences });
   });
 
   return httpServer;

@@ -227,7 +227,7 @@ function buildSeedData() {
     { id: "brand-oneplus", name: "OnePlus India", logo_url: img("photo-1511707171634-5f897ff02aa9", 200, 200), verified: true, website: "https://oneplus.in", industry: "Tech", description: "Never Settle.", contact_email: "marketing@oneplus.example", created_at: daysAgo(750) },
     { id: "brand-mivi", name: "Mivi", logo_url: img("photo-1572569511254-d8f925fe2cbb", 200, 200), verified: true, website: "https://mivi.com", industry: "Tech", description: "Made in India audio.", contact_email: "hello@mivi.example", created_at: daysAgo(400) },
     { id: "brand-sugarcosmetics", name: "SUGAR Cosmetics", logo_url: img("photo-1596462502278-27bfdc403348", 200, 200), verified: true, website: "https://sugarcosmetics.com", industry: "Beauty", description: "Bold. Proud. Unapologetic.", contact_email: "influencer@sugar.example", created_at: daysAgo(450) },
-  ].map((brand) => ({ ...brand, wallet_balance_paise: 0 }));
+  ].map((brand) => ({ ...brand, wallet_balance_paise: 0, notification_preferences: {} }));
 
   // ---------- Campaigns (INR, realistic Indian rates) ----------
   const campaigns: Campaign[] = [
@@ -549,20 +549,20 @@ function buildSeedData() {
   ];
 
   // ---------- Threads + messages ----------
-  const t1: MessageThread = { id: "t-aarav-oneplus", creator_id: aarav.id, brand_id: "brand-oneplus", campaign_id: "c-oneplus-nord", last_message_preview: "Great — device shipping tomorrow via BlueDart.", last_message_at: daysAgo(0.3), unread_count: 1, brand_online: true, status_label: "CAMPAIGN ACTIVE" };
-  const t2: MessageThread = { id: "t-aarav-cred", creator_id: aarav.id, brand_id: "brand-cred", campaign_id: "c-cred-rewards", last_message_preview: "Love the premium tone. Approved!", last_message_at: daysAgo(0.5), unread_count: 0, brand_online: true, status_label: "CAMPAIGN ACTIVE" };
-  const t3: MessageThread = { id: "t-priya-nykaa", creator_id: priya.id, brand_id: "brand-nykaa", campaign_id: "c-nykaa-summer", last_message_preview: "Can you zoom in more on the foundation?", last_message_at: daysAgo(0.5), unread_count: 2, brand_online: true, status_label: "CAMPAIGN ACTIVE" };
+  const t1: MessageThread = { id: "t-aarav-oneplus", creator_id: aarav.id, brand_id: "brand-oneplus", campaign_id: "c-oneplus-nord", last_message_preview: "Great — device shipping tomorrow via BlueDart.", last_message_at: daysAgo(0.3), unread_count: 1, brand_online: true, status_label: "CAMPAIGN ACTIVE", created_at: daysAgo(2), updated_at: daysAgo(0.3) };
+  const t2: MessageThread = { id: "t-aarav-cred", creator_id: aarav.id, brand_id: "brand-cred", campaign_id: "c-cred-rewards", last_message_preview: "Love the premium tone. Approved!", last_message_at: daysAgo(0.5), unread_count: 0, brand_online: true, status_label: "CAMPAIGN ACTIVE", created_at: daysAgo(4), updated_at: daysAgo(0.5) };
+  const t3: MessageThread = { id: "t-priya-nykaa", creator_id: priya.id, brand_id: "brand-nykaa", campaign_id: "c-nykaa-summer", last_message_preview: "Can you zoom in more on the foundation?", last_message_at: daysAgo(0.5), unread_count: 2, brand_online: true, status_label: "CAMPAIGN ACTIVE", created_at: daysAgo(2), updated_at: daysAgo(0.5) };
 
   const message_threads: MessageThread[] = [t1, t2, t3];
 
   const messages: Message[] = [
-    { id: "m1", thread_id: t1.id, sender_id: "brand:brand-oneplus", sender_role: "brand", body: "Hi Aarav! Welcome to the Nord 5 campaign. Shipping the device to your Mumbai address tomorrow.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, created_at: daysAgo(2) },
-    { id: "m2", thread_id: t1.id, sender_id: aarav.id, sender_role: "creator", body: "Thanks! Will start shooting day-in-the-life content the moment it lands.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, created_at: daysAgo(1.9) },
-    { id: "m3", thread_id: t1.id, sender_id: "brand:brand-oneplus", sender_role: "brand", body: "Great — device shipping tomorrow via BlueDart.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: false, created_at: daysAgo(0.3) },
-    { id: "m4", thread_id: t2.id, sender_id: aarav.id, sender_role: "creator", body: "Draft uploaded — really went for that CRED minimalism.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, created_at: daysAgo(1) },
-    { id: "m5", thread_id: t2.id, sender_id: "brand:brand-cred", sender_role: "brand", body: "Love the premium tone. Approved!", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, created_at: daysAgo(0.5) },
-    { id: "m6", thread_id: t3.id, sender_id: "brand:brand-nykaa", sender_role: "brand", body: "Draft's beautiful — can we see the foundation texture more clearly?", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: false, created_at: daysAgo(0.5) },
-    { id: "m7", thread_id: t3.id, sender_id: "brand:brand-nykaa", sender_role: "brand", body: "Can you zoom in more on the foundation?", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: false, created_at: daysAgo(0.5) },
+    { id: "m1", thread_id: t1.id, sender_id: "brand:brand-oneplus", sender_role: "brand", body: "Hi Aarav! Welcome to the Nord 5 campaign. Shipping the device to your Mumbai address tomorrow.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, read_at: daysAgo(2), created_at: daysAgo(2) },
+    { id: "m2", thread_id: t1.id, sender_id: aarav.id, sender_role: "creator", body: "Thanks! Will start shooting day-in-the-life content the moment it lands.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, read_at: daysAgo(1.8), created_at: daysAgo(1.9) },
+    { id: "m3", thread_id: t1.id, sender_id: "brand:brand-oneplus", sender_role: "brand", body: "Great — device shipping tomorrow via BlueDart.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: false, read_at: null, created_at: daysAgo(0.3) },
+    { id: "m4", thread_id: t2.id, sender_id: aarav.id, sender_role: "creator", body: "Draft uploaded — really went for that CRED minimalism.", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, read_at: daysAgo(0.9), created_at: daysAgo(1) },
+    { id: "m5", thread_id: t2.id, sender_id: "brand:brand-cred", sender_role: "brand", body: "Love the premium tone. Approved!", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: true, read_at: daysAgo(0.5), created_at: daysAgo(0.5) },
+    { id: "m6", thread_id: t3.id, sender_id: "brand:brand-nykaa", sender_role: "brand", body: "Draft's beautiful — can we see the foundation texture more clearly?", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: false, read_at: null, created_at: daysAgo(0.5) },
+    { id: "m7", thread_id: t3.id, sender_id: "brand:brand-nykaa", sender_role: "brand", body: "Can you zoom in more on the foundation?", attachment_url: null, attachment_kind: null, attachment_name: null, attachment_size: null, read: false, read_at: null, created_at: daysAgo(0.5) },
   ];
 
   // ---------- Transactions (INR paise) ----------

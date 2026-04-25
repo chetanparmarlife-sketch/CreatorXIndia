@@ -50,6 +50,10 @@ import CampaignDeliverablesPage from "@/pages/brand/campaigns/[id]/deliverables"
 import WalletPage from "@/pages/brand/wallet";
 import MarketplacePage from "@/pages/brand/marketplace";
 import CreatorProfilePage from "@/pages/brand/creators/[id]";
+import BrandInboxPage from "@/pages/brand/inbox";
+import BrandThreadPage from "@/pages/brand/messages/[threadId]";
+import BrandTeamPage from "@/pages/brand/team";
+import BrandSettingsPage from "@/pages/brand/settings";
 
 // Admin pages
 import AdminDashboardPage from "@/pages/admin/dashboard";
@@ -197,6 +201,18 @@ function AppRouter() {
       </Route>
       <Route path="/brand/marketplace">
         <BrandRoute><MarketplacePage /></BrandRoute>
+      </Route>
+      <Route path="/brand/inbox">
+        <BrandRoute><BrandInboxPage /></BrandRoute>
+      </Route>
+      <Route path="/brand/messages/:threadId">
+        <BrandRoute><BrandThreadPage /></BrandRoute>
+      </Route>
+      <Route path="/brand/team">
+        <BrandRoute><BrandTeamPage /></BrandRoute>
+      </Route>
+      <Route path="/brand/settings">
+        <BrandRoute><BrandSettingsPage /></BrandRoute>
       </Route>
       <Route path="/brand/campaigns/new">
         <BrandRoute><NewCampaignPage /></BrandRoute>

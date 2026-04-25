@@ -68,6 +68,7 @@ export type SocialPlatform =
 export type PushPlatform = "ios" | "android" | "web";
 export type WalletTransactionType = "credit" | "debit";
 export type WalletTransactionStatus = "pending" | "completed" | "failed";
+export type BrandTeamRole = "admin" | "member" | "viewer";
 
 // Indian influencer tiers (by follower count)
 export type CreatorTier = "nano" | "micro" | "mid" | "macro" | "mega";
@@ -184,6 +185,7 @@ export interface Brand {
   description: string | null;
   contact_email: string | null;
   wallet_balance_paise: number;
+  notification_preferences: Record<string, boolean>;
   created_at: string;
 }
 
@@ -268,6 +270,8 @@ export interface MessageThread {
   unread_count: number;      // unread for creator
   brand_online: boolean;
   status_label: string | null; // "CAMPAIGN ACTIVE"
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Message {
@@ -281,6 +285,18 @@ export interface Message {
   attachment_name: string | null;
   attachment_size: string | null;
   read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface BrandTeamMember {
+  id: string;
+  brand_id: string;
+  user_id: string;
+  role: BrandTeamRole;
+  invited_by: string;
+  invited_at: string;
+  accepted_at: string | null;
   created_at: string;
 }
 
@@ -430,6 +446,7 @@ export const socialPlatformEnum = pgEnum("social_platform", ["instagram", "youtu
 export const pushPlatformEnum = pgEnum("push_platform", ["ios", "android", "web"]);
 export const walletTransactionTypeEnum = pgEnum("wallet_transaction_type", ["credit", "debit"]);
 export const walletTransactionStatusEnum = pgEnum("wallet_transaction_status", ["pending", "completed", "failed"]);
+export const brandTeamRoleEnum = pgEnum("brand_team_role", ["admin", "member", "viewer"]);
 export const creatorTierEnum = pgEnum("creator_tier", ["nano", "micro", "mid", "macro", "mega"]);
 export const kycStatusEnum = pgEnum("kyc_status", ["none", "pending", "verified", "rejected"]);
 export const eventKindEnum = pgEnum("event_kind", ["event", "perk", "news"]);
@@ -508,6 +525,18 @@ export const brands = pgTable("brands", {
   description: text("description"),
   contact_email: text("contact_email"),
   wallet_balance_paise: integer("wallet_balance_paise").notNull().default(0),
+  notification_preferences: jsonb("notification_preferences").$type<Record<string, boolean>>().notNull().default(sql`'{}'::jsonb`),
+  created_at: text("created_at").notNull(),
+});
+
+export const brand_team_members = pgTable("brand_team_members", {
+  id: text("id").primaryKey(),
+  brand_id: text("brand_id").notNull().references(() => brands.id, { onDelete: "cascade" }),
+  user_id: text("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  role: brandTeamRoleEnum("role").notNull().default("member"),
+  invited_by: text("invited_by").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  invited_at: text("invited_at").notNull(),
+  accepted_at: text("accepted_at"),
   created_at: text("created_at").notNull(),
 });
 
@@ -607,7 +636,11 @@ export const message_threads = pgTable("message_threads", {
   unread_count: integer("unread_count").notNull().default(0),
   brand_online: boolean("brand_online").notNull().default(false),
   status_label: text("status_label"),
+  created_at: text("created_at").notNull(),
+  updated_at: text("updated_at").notNull(),
 });
+
+export const threads = message_threads;
 
 export const messages = pgTable("messages", {
   id: text("id").primaryKey(),
@@ -620,6 +653,7 @@ export const messages = pgTable("messages", {
   attachment_name: text("attachment_name"),
   attachment_size: text("attachment_size"),
   read: boolean("read").notNull().default(false),
+  read_at: text("read_at"),
   created_at: text("created_at").notNull(),
 });
 

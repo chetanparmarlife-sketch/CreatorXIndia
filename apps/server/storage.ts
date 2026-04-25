@@ -1,9 +1,10 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type {
   Application,
   AuditLog,
   Brand,
+  BrandTeamRole,
   Campaign,
   CommunityItem,
   CreatorTier,
@@ -25,6 +26,7 @@ import {
   applications as applicationsTable,
   audit_log as auditLogTable,
   brands as brandsTable,
+  brand_team_members as brandTeamMembersTable,
   campaigns as campaignsTable,
   checkCampaignEligibility,
   community as communityTable,
@@ -301,12 +303,97 @@ export interface IStorage {
       brief_url?: string;
     },
   ): Promise<Campaign>;
+  getBrandThreads(brandId: string): Promise<Array<{
+    id: string;
+    campaign_id: string | null;
+    brand_id: string;
+    creator_id: string;
+    created_at: string;
+    updated_at: string;
+    last_message_preview: string;
+    last_message_at: string;
+    unread_count: number;
+    creator: {
+      id: string;
+      display_name: string;
+      avatar_url: string | null;
+    } | null;
+    campaign: {
+      id: string;
+      title: string;
+    } | null;
+  }>>;
+  getThreadMessages(
+    brandId: string,
+    threadId: string,
+  ): Promise<{
+    thread: {
+      id: string;
+      campaign_id: string | null;
+      brand_id: string;
+      creator_id: string;
+      created_at: string;
+      updated_at: string;
+      creator: {
+        id: string;
+        display_name: string;
+        avatar_url: string | null;
+      } | null;
+      campaign: {
+        id: string;
+        title: string;
+      } | null;
+    };
+    messages: Message[];
+  } | null>;
+  createMessage(
+    brandId: string,
+    threadId: string,
+    body: string,
+  ): Promise<Message | null>;
+  createOrGetThread(
+    brandId: string,
+    creatorId: string,
+    campaignId: string | null,
+    body: string,
+  ): Promise<{ threadId: string }>;
+  getBrandTeam(brandId: string): Promise<Array<{
+    id: string;
+    brand_id: string;
+    user_id: string;
+    role: BrandTeamRole;
+    invited_by: string;
+    invited_at: string;
+    accepted_at: string | null;
+    created_at: string;
+    user: {
+      id: string;
+      full_name: string;
+      email: string;
+      avatar_url: string | null;
+    } | null;
+  }>>;
+  inviteTeamMember(brandId: string, invitedBy: string, email: string, role: BrandTeamRole): Promise<{
+    id: string;
+    brand_id: string;
+    user_id: string;
+    role: BrandTeamRole;
+    invited_by: string;
+    invited_at: string;
+    accepted_at: string | null;
+    created_at: string;
+  }>;
+  removeTeamMember(brandId: string, requesterId: string, userId: string): Promise<void>;
+  updateNotificationPreferences(
+    brandId: string,
+    preferences: Record<string, boolean>,
+  ): Promise<Record<string, boolean>>;
 }
 
 export async function resetDb(): Promise<void> {
   await db.execute(
     sql.raw(
-      'TRUNCATE TABLE "wallet_transactions", "invoices", "push_tokens", "messages", "message_threads", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
+      'TRUNCATE TABLE "wallet_transactions", "invoices", "push_tokens", "messages", "message_threads", "brand_team_members", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
     ),
   );
   initPromise = null;
@@ -362,6 +449,7 @@ export async function getBrandProfile(userId: string): Promise<Brand> {
     description: null,
     contact_email: profile?.email ?? null,
     wallet_balance_paise: 0,
+    notification_preferences: {},
     created_at: now(),
   };
 
@@ -490,6 +578,472 @@ export async function getBrandActivity(userId: string): Promise<AuditLog[]> {
   });
 
   return sortDescBy(rows).slice(0, 10);
+}
+
+export async function getBrandThreads(brandId: string): Promise<Array<{
+  id: string;
+  campaign_id: string | null;
+  brand_id: string;
+  creator_id: string;
+  created_at: string;
+  updated_at: string;
+  last_message_preview: string;
+  last_message_at: string;
+  unread_count: number;
+  creator: {
+    id: string;
+    display_name: string;
+    avatar_url: string | null;
+  } | null;
+  campaign: {
+    id: string;
+    title: string;
+  } | null;
+}>> {
+  await ensureSeeded();
+
+  const rows = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(eq(messageThreadsTable.brand_id, brandId));
+
+  const sorted = rows.sort((a, b) => {
+    const aTime = a.updated_at || a.last_message_at;
+    const bTime = b.updated_at || b.last_message_at;
+    return aTime < bTime ? 1 : -1;
+  });
+
+  return Promise.all(
+    sorted.map(async (thread) => {
+      const [creator, campaign, unreadForBrand] = await Promise.all([
+        profiles.byId(thread.creator_id),
+        thread.campaign_id ? campaigns.byId(thread.campaign_id) : Promise.resolve(null),
+        db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(messagesTable)
+          .where(
+            and(
+              eq(messagesTable.thread_id, thread.id),
+              eq(messagesTable.sender_role, "creator"),
+              isNull(messagesTable.read_at),
+            ),
+          ),
+      ]);
+
+      return {
+        id: thread.id,
+        campaign_id: thread.campaign_id,
+        brand_id: thread.brand_id,
+        creator_id: thread.creator_id,
+        created_at: thread.created_at || thread.last_message_at,
+        updated_at: thread.updated_at || thread.last_message_at,
+        last_message_preview: thread.last_message_preview,
+        last_message_at: thread.last_message_at,
+        unread_count: unreadForBrand[0]?.count ?? 0,
+        creator: creator
+          ? {
+              id: creator.id,
+              display_name: creator.full_name,
+              avatar_url: creator.avatar_url,
+            }
+          : null,
+        campaign: campaign
+          ? {
+              id: campaign.id,
+              title: campaign.title,
+            }
+          : null,
+      };
+    }),
+  );
+}
+
+export async function getThreadMessages(
+  brandId: string,
+  threadId: string,
+): Promise<{
+  thread: {
+    id: string;
+    campaign_id: string | null;
+    brand_id: string;
+    creator_id: string;
+    created_at: string;
+    updated_at: string;
+    creator: {
+      id: string;
+      display_name: string;
+      avatar_url: string | null;
+    } | null;
+    campaign: {
+      id: string;
+      title: string;
+    } | null;
+  };
+  messages: Message[];
+} | null> {
+  await ensureSeeded();
+
+  const [thread] = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(eq(messageThreadsTable.id, threadId))
+    .limit(1);
+
+  if (!thread) return null;
+  if (thread.brand_id !== brandId) {
+    throw new Error("FORBIDDEN");
+  }
+
+  const readAt = now();
+  await db
+    .update(messagesTable)
+    .set({ read_at: readAt })
+    .where(
+      and(
+        eq(messagesTable.thread_id, threadId),
+        eq(messagesTable.sender_role, "creator"),
+        isNull(messagesTable.read_at),
+      ),
+    );
+
+  const [creator, campaign, messageRows] = await Promise.all([
+    profiles.byId(thread.creator_id),
+    thread.campaign_id ? campaigns.byId(thread.campaign_id) : Promise.resolve(null),
+    db.select().from(messagesTable).where(eq(messagesTable.thread_id, threadId)),
+  ]);
+
+  return {
+    thread: {
+      id: thread.id,
+      campaign_id: thread.campaign_id,
+      brand_id: thread.brand_id,
+      creator_id: thread.creator_id,
+      created_at: thread.created_at || thread.last_message_at,
+      updated_at: thread.updated_at || thread.last_message_at,
+      creator: creator
+        ? {
+            id: creator.id,
+            display_name: creator.full_name,
+            avatar_url: creator.avatar_url,
+          }
+        : null,
+      campaign: campaign
+        ? {
+            id: campaign.id,
+            title: campaign.title,
+          }
+        : null,
+    },
+    messages: sortAscBy(messageRows),
+  };
+}
+
+export async function createMessage(
+  brandId: string,
+  threadId: string,
+  body: string,
+): Promise<Message | null> {
+  await ensureSeeded();
+
+  const [thread] = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(eq(messageThreadsTable.id, threadId))
+    .limit(1);
+  if (!thread) return null;
+  if (thread.brand_id !== brandId) {
+    throw new Error("FORBIDDEN");
+  }
+
+  const createdAt = now();
+  const msg: Message = {
+    id: newId(),
+    thread_id: threadId,
+    sender_id: `brand:${brandId}`,
+    sender_role: "brand",
+    body,
+    attachment_url: null,
+    attachment_kind: null,
+    attachment_name: null,
+    attachment_size: null,
+    read: false,
+    read_at: null,
+    created_at: createdAt,
+  };
+
+  await db.insert(messagesTable).values(msg);
+  await db
+    .update(messageThreadsTable)
+    .set({
+      last_message_preview: body.slice(0, 120),
+      last_message_at: createdAt,
+      updated_at: createdAt,
+      unread_count: thread.unread_count + 1,
+    })
+    .where(eq(messageThreadsTable.id, threadId));
+
+  await writeAudit(brandId, "brand_send_message", "message", msg.id, {
+    thread_id: threadId,
+  });
+
+  return msg;
+}
+
+export async function createOrGetThread(
+  brandId: string,
+  creatorId: string,
+  campaignId: string | null,
+  body: string,
+): Promise<{ threadId: string }> {
+  await ensureSeeded();
+
+  const creator = await profiles.byId(creatorId);
+  if (!creator || creator.role !== "creator") {
+    throw new Error("CREATOR_NOT_FOUND");
+  }
+
+  if (campaignId) {
+    const campaign = await campaigns.byId(campaignId);
+    if (!campaign) {
+      throw new Error("CAMPAIGN_NOT_FOUND");
+    }
+    if (campaign.brand_id !== brandId) {
+      throw new Error("FORBIDDEN");
+    }
+  }
+
+  const existing = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(
+      and(
+        eq(messageThreadsTable.brand_id, brandId),
+        eq(messageThreadsTable.creator_id, creatorId),
+        campaignId
+          ? eq(messageThreadsTable.campaign_id, campaignId)
+          : isNull(messageThreadsTable.campaign_id),
+      ),
+    )
+    .limit(1);
+
+  const createdAt = now();
+  let threadId = existing[0]?.id ?? "";
+  let unreadCount = existing[0]?.unread_count ?? 0;
+
+  if (!existing[0]) {
+    threadId = newId();
+    const thread: MessageThread = {
+      id: threadId,
+      creator_id: creatorId,
+      brand_id: brandId,
+      campaign_id: campaignId,
+      last_message_preview: body.slice(0, 120),
+      last_message_at: createdAt,
+      unread_count: 1,
+      brand_online: true,
+      status_label: campaignId ? "CAMPAIGN ACTIVE" : null,
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
+    await db.insert(messageThreadsTable).values(thread);
+    unreadCount = 1;
+    await writeAudit(brandId, "brand_create_thread", "thread", threadId, {
+      creator_id: creatorId,
+      campaign_id: campaignId,
+    });
+  }
+
+  const msg: Message = {
+    id: newId(),
+    thread_id: threadId,
+    sender_id: `brand:${brandId}`,
+    sender_role: "brand",
+    body,
+    attachment_url: null,
+    attachment_kind: null,
+    attachment_name: null,
+    attachment_size: null,
+    read: false,
+    read_at: null,
+    created_at: createdAt,
+  };
+  await db.insert(messagesTable).values(msg);
+
+  await db
+    .update(messageThreadsTable)
+    .set({
+      last_message_preview: body.slice(0, 120),
+      last_message_at: createdAt,
+      updated_at: createdAt,
+      unread_count: existing[0] ? unreadCount + 1 : unreadCount,
+    })
+    .where(eq(messageThreadsTable.id, threadId));
+
+  await writeAudit(brandId, "brand_send_message", "message", msg.id, {
+    thread_id: threadId,
+  });
+
+  return { threadId };
+}
+
+export async function getBrandTeam(brandId: string): Promise<Array<{
+  id: string;
+  brand_id: string;
+  user_id: string;
+  role: BrandTeamRole;
+  invited_by: string;
+  invited_at: string;
+  accepted_at: string | null;
+  created_at: string;
+  user: {
+    id: string;
+    full_name: string;
+    email: string;
+    avatar_url: string | null;
+  } | null;
+}>> {
+  await ensureSeeded();
+
+  const rows = await db
+    .select()
+    .from(brandTeamMembersTable)
+    .where(eq(brandTeamMembersTable.brand_id, brandId));
+
+  const sorted = rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+
+  return Promise.all(
+    sorted.map(async (member) => {
+      const user = await profiles.byId(member.user_id);
+      return {
+        ...member,
+        user: user
+          ? {
+              id: user.id,
+              full_name: user.full_name,
+              email: user.email,
+              avatar_url: user.avatar_url,
+            }
+          : null,
+      };
+    }),
+  );
+}
+
+export async function inviteTeamMember(
+  brandId: string,
+  invitedBy: string,
+  email: string,
+  role: BrandTeamRole,
+): Promise<{
+  id: string;
+  brand_id: string;
+  user_id: string;
+  role: BrandTeamRole;
+  invited_by: string;
+  invited_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}> {
+  await ensureSeeded();
+  await getBrandProfile(brandId);
+
+  const normalizedEmail = email.trim().toLowerCase();
+  let user = await profiles.byEmail(normalizedEmail);
+  if (!user) {
+    const localPart = normalizedEmail.split("@")[0] || "brand-member";
+    const safeLocal = localPart.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "brand-member";
+    const handle = `${safeLocal}-${newId().slice(0, 6)}`;
+    user = await profiles.create({
+      email: normalizedEmail,
+      full_name: localPart,
+      handle,
+      role: "brand",
+    });
+  }
+
+  const [existing] = await db
+    .select()
+    .from(brandTeamMembersTable)
+    .where(
+      and(
+        eq(brandTeamMembersTable.brand_id, brandId),
+        eq(brandTeamMembersTable.user_id, user.id),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    return existing;
+  }
+
+  const createdAt = now();
+  const row = {
+    id: newId(),
+    brand_id: brandId,
+    user_id: user.id,
+    role,
+    invited_by: invitedBy,
+    invited_at: createdAt,
+    accepted_at: null,
+    created_at: createdAt,
+  };
+
+  await db.insert(brandTeamMembersTable).values(row);
+  await writeAudit(invitedBy, "invite_brand_team_member", "brand_team_member", row.id, {
+    brand_id: brandId,
+    user_id: user.id,
+    email: normalizedEmail,
+    role,
+  });
+  console.log(`[team] Invite sent to ${normalizedEmail} for brand ${brandId} as ${role}`);
+  return row;
+}
+
+export async function removeTeamMember(
+  brandId: string,
+  requesterId: string,
+  userId: string,
+): Promise<void> {
+  await ensureSeeded();
+  if (requesterId === userId) {
+    throw new Error("SELF_REMOVE_NOT_ALLOWED");
+  }
+
+  await db
+    .delete(brandTeamMembersTable)
+    .where(
+      and(
+        eq(brandTeamMembersTable.brand_id, brandId),
+        eq(brandTeamMembersTable.user_id, userId),
+      ),
+    );
+
+  await writeAudit(requesterId, "remove_brand_team_member", "brand_team_member", userId, {
+    brand_id: brandId,
+    user_id: userId,
+  });
+}
+
+export async function updateNotificationPreferences(
+  brandId: string,
+  preferences: Record<string, boolean>,
+): Promise<Record<string, boolean>> {
+  await ensureSeeded();
+  const current = await getBrandProfile(brandId);
+  const merged = {
+    ...(current.notification_preferences ?? {}),
+    ...preferences,
+  };
+
+  await db
+    .update(brandsTable)
+    .set({ notification_preferences: merged })
+    .where(eq(brandsTable.id, brandId));
+
+  await writeAudit(brandId, "update_brand_notification_preferences", "brand", brandId, {
+    preferences: merged,
+  });
+
+  return merged;
 }
 
 export async function createCampaign(
@@ -1616,9 +2170,9 @@ export const brands = {
     return row ?? null;
   },
 
-  async create(data: Omit<Brand, "id" | "created_at" | "wallet_balance_paise">): Promise<Brand> {
+  async create(data: Omit<Brand, "id" | "created_at" | "wallet_balance_paise" | "notification_preferences">): Promise<Brand> {
     await ensureSeeded();
-    const row: Brand = { ...data, id: newId(), wallet_balance_paise: 0, created_at: now() };
+    const row: Brand = { ...data, id: newId(), wallet_balance_paise: 0, notification_preferences: {}, created_at: now() };
     await db.insert(brandsTable).values(row);
     await writeAudit("system", "create_brand", "brand", row.id, row);
     return row;
@@ -1766,16 +2320,19 @@ export const applications = {
           .limit(1);
 
         if (!existingThread) {
+          const createdAt = now();
           const thread: MessageThread = {
             id: newId(),
             creator_id: a.creator_id,
             brand_id: c.brand_id,
             campaign_id: c.id,
             last_message_preview: `Welcome to ${c.title}! Excited to collaborate.`,
-            last_message_at: now(),
+            last_message_at: createdAt,
             unread_count: 1,
             brand_online: true,
             status_label: "CAMPAIGN ACTIVE",
+            created_at: createdAt,
+            updated_at: createdAt,
           };
           await db.insert(messageThreadsTable).values(thread);
           await db.insert(messagesTable).values({
@@ -1789,7 +2346,8 @@ export const applications = {
             attachment_name: null,
             attachment_size: null,
             read: false,
-            created_at: now(),
+            read_at: null,
+            created_at: createdAt,
           });
         }
       }
@@ -1954,6 +2512,7 @@ export const messages = {
     const t = await messages.thread(threadId);
     if (!t) return null;
 
+    const createdAt = now();
     const msg: Message = {
       id: newId(),
       thread_id: threadId,
@@ -1965,7 +2524,8 @@ export const messages = {
       attachment_name: attachment?.name ?? null,
       attachment_size: attachment?.size ?? null,
       read: senderRole === "creator",
-      created_at: now(),
+      read_at: senderRole === "brand" ? null : createdAt,
+      created_at: createdAt,
     };
 
     await db.insert(messagesTable).values(msg);
@@ -1974,6 +2534,7 @@ export const messages = {
       .set({
         last_message_preview: body.slice(0, 120),
         last_message_at: msg.created_at,
+        updated_at: msg.created_at,
         unread_count: senderRole !== "creator" ? t.unread_count + 1 : 0,
       })
       .where(eq(messageThreadsTable.id, threadId));
@@ -1987,8 +2548,16 @@ export const messages = {
     const t = await messages.thread(threadId);
     if (!t) return;
 
-    await db.update(messageThreadsTable).set({ unread_count: 0 }).where(eq(messageThreadsTable.id, threadId));
-    await db.update(messagesTable).set({ read: true }).where(eq(messagesTable.thread_id, threadId));
+    await db.update(messageThreadsTable).set({ unread_count: 0, updated_at: now() }).where(eq(messageThreadsTable.id, threadId));
+    await db
+      .update(messagesTable)
+      .set({ read: true, read_at: now() })
+      .where(
+        and(
+          eq(messagesTable.thread_id, threadId),
+          eq(messagesTable.sender_role, "brand"),
+        ),
+      );
     await writeAudit(t.creator_id, "mark_thread_read", "thread", threadId, { read: true });
   },
 
@@ -2002,16 +2571,19 @@ export const messages = {
 
     if (existing) return existing;
 
+    const createdAt = now();
     const t: MessageThread = {
       id: newId(),
       creator_id,
       brand_id,
       campaign_id: null,
       last_message_preview: opener.slice(0, 120),
-      last_message_at: now(),
+      last_message_at: createdAt,
       unread_count: 0,
       brand_online: Math.random() > 0.5,
       status_label: null,
+      created_at: createdAt,
+      updated_at: createdAt,
     };
 
     await db.insert(messageThreadsTable).values(t);
@@ -2026,7 +2598,8 @@ export const messages = {
       attachment_name: null,
       attachment_size: null,
       read: true,
-      created_at: now(),
+      read_at: null,
+      created_at: createdAt,
     });
 
     await writeAudit(creator_id, "create_thread", "thread", t.id, { brand_id });
