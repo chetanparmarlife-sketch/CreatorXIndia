@@ -15,6 +15,8 @@ import {
   getBrandThreads, getThreadMessages, createMessage, createOrGetThread,
   getBrandTeam, inviteTeamMember, removeTeamMember, updateNotificationPreferences,
   getAllBrands, updateBrandStatus,
+  getAllCampaigns, adminUpdateCampaignStatus, getAllApplications, adminUpdateApplicationStatus,
+  getAllDeliverables, adminUpdateDeliverableStatus, getAdminDashboardStats, getAuditLog,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -145,6 +147,29 @@ const adminBrandStatusSchema = z.object({
   status: z.enum(["approved", "rejected"]),
   reason: z.string().trim().optional(),
 });
+const adminCampaignStatusSchema = z.object({
+  status: z.enum(["active", "rejected", "paused", "completed"]),
+});
+const adminApplicationStatusSchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+});
+const adminDeliverableStatusSchema = z
+  .object({
+    status: z.enum(["approved", "rejected"]),
+    rejection_reason: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z.string().trim().min(1, "rejection_reason is required when rejecting").optional(),
+    ),
+  })
+  .superRefine((value, ctx) => {
+    if (value.status === "rejected" && !value.rejection_reason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "rejection_reason is required when rejecting",
+        path: ["rejection_reason"],
+      });
+    }
+  });
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
   if (!status) return undefined;
@@ -218,7 +243,11 @@ async function requireAdmin(req: Request, res: Response): Promise<string | null>
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
-  app.use("/api/admin", requireAuth, requireRole("admin_ops", "admin_support", "admin_finance", "admin_readonly"));
+  app.use(
+    "/api/admin",
+    (req, res, next) => requireAuth(req, res, () => impersonate(req, res, next)),
+    requireRole("admin_ops", "admin_support", "admin_finance", "admin_readonly"),
+  );
   app.use("/api/creator", requireAuth, requireRole("creator"));
   app.use("/api/brand", (req, res, next) => {
     if (req.path === "/wallet/webhook") {
@@ -785,6 +814,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(await analytics.summary());
   });
 
+  app.get("/api/admin/dashboard-stats", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    res.json(await getAdminDashboardStats());
+  });
+
   // Creators ---------------------------------------------------------
   app.get("/api/admin/creators", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
@@ -874,11 +908,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Campaigns --------------------------------------------------------
   app.get("/api/admin/campaigns", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const allCampaigns = await campaigns.list();
-    const enriched = await Promise.all(
-      allCampaigns.map(async (c) => ({ ...c, brand: await brands.byId(c.brand_id) })),
-    );
-    res.json({ campaigns: enriched });
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const result = await getAllCampaigns(status);
+    res.json({ campaigns: result });
+  });
+
+  app.patch("/api/admin/campaigns/:id/status", requireRole("admin_ops"), async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const parsed = adminCampaignStatusSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const campaignId = typeof req.params.id === "string" ? req.params.id : "";
+      const campaign = await adminUpdateCampaignStatus(campaignId, parsed.data.status, uid);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+      return res.json({ campaign });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid status transition";
+      return res.status(400).json({ error: message });
+    }
   });
 
   app.post("/api/admin/campaigns", async (req, res) => {
@@ -905,15 +955,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Applications -----------------------------------------------------
   app.get("/api/admin/applications", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const list = await applications.list({ status: (req.query.status as any) || undefined });
-    const enriched = await Promise.all(
-      list.map(async (a) => ({
-        ...a,
-        creator: await profiles.byId(a.creator_id),
-        campaign: await campaigns.byId(a.campaign_id),
-      })),
-    );
-    res.json({ applications: enriched });
+    res.json({ applications: await getAllApplications() });
+  });
+
+  app.patch("/api/admin/applications/:id/status", requireRole("admin_ops", "admin_support"), async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const parsed = adminApplicationStatusSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const applicationId = typeof req.params.id === "string" ? req.params.id : "";
+    const application = await adminUpdateApplicationStatus(applicationId, parsed.data.status, uid);
+    if (!application) return res.status(404).json({ error: "Application not found" });
+    return res.json({ application });
   });
 
   app.post("/api/admin/applications/:id/decide", async (req, res) => {
@@ -928,15 +983,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Deliverables -----------------------------------------------------
   app.get("/api/admin/deliverables", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    const list = await deliverables.list({ status: (req.query.status as any) || "submitted" });
-    const enriched = await Promise.all(
-      list.map(async (d) => ({
-        ...d,
-        creator: await profiles.byId(d.creator_id),
-        campaign: await campaigns.byId(d.campaign_id),
-      })),
-    );
-    res.json({ deliverables: enriched });
+    res.json({ deliverables: await getAllDeliverables() });
+  });
+
+  app.patch("/api/admin/deliverables/:id/status", requireRole("admin_ops", "admin_support"), async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const parsed = adminDeliverableStatusSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const deliverableId = typeof req.params.id === "string" ? req.params.id : "";
+      const deliverable = await adminUpdateDeliverableStatus(
+        deliverableId,
+        parsed.data.status,
+        parsed.data.rejection_reason,
+        uid,
+      );
+      if (!deliverable) return res.status(404).json({ error: "Deliverable not found" });
+      return res.json({ deliverable });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not update deliverable";
+      return res.status(400).json({ error: message });
+    }
   });
 
   app.post("/api/admin/deliverables/:id/decide", async (req, res) => {
@@ -1048,6 +1118,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       })),
     );
     res.json({ audit: rows });
+  });
+
+  app.get("/api/admin/audit-log", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const parsedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 50;
+    const result = await getAuditLog({
+      actor: typeof req.query.actor === "string" ? req.query.actor : undefined,
+      action: typeof req.query.action === "string" ? req.query.action : undefined,
+      targetType: typeof req.query.targetType === "string" ? req.query.targetType : undefined,
+      from: typeof req.query.from === "string" ? req.query.from : undefined,
+      to: typeof req.query.to === "string" ? req.query.to : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: Number.isFinite(parsedLimit) ? parsedLimit : 50,
+    });
+    res.json(result);
   });
 
   // Danger: reset demo data

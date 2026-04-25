@@ -45,7 +45,9 @@ export function impersonate(req: Request, res: Response, next: NextFunction): vo
 
     req.actingAsBrandId = brandId;
     req.originalUser = actorUser;
-    req.user = { id: brandId, role: "brand" };
+    if (req.originalUrl.startsWith("/api/brand")) {
+      req.user = { id: brandId, role: "brand" };
+    }
   }
 
   auditContext.run(

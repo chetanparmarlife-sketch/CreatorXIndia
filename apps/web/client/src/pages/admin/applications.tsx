@@ -1,122 +1,93 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AdminShell } from "@/components/admin-shell";
-import { Icon } from "@/components/brand";
+import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
-import { fmtDate, timeAgo } from "@/lib/format";
-import { cn } from "@/lib/utils";
-import type { Application, ApplicationStatus, Profile, Campaign } from "@creatorx/schema";
+import { fmtDate } from "@/lib/format";
+import { canOverride, isFinanceOnly, isReadOnly, useAdminRole } from "@/hooks/useAdminRole";
+import type { Application, Campaign, Profile } from "@creatorx/schema";
 
-type Enriched = Application & { creator: Profile | null; campaign: Campaign | null };
+type AdminApplication = Application & {
+  creator: Profile | null;
+  campaign: Campaign | null;
+  brand: { id: string; name: string } | null;
+};
 
-const STATUS_OPTIONS: (ApplicationStatus | "all")[] = ["all", "pending", "accepted", "rejected", "withdrawn"];
+function uiStatus(status: Application["status"]): "pending" | "approved" | "rejected" {
+  if (status === "accepted") return "approved";
+  if (status === "rejected" || status === "withdrawn") return "rejected";
+  return "pending";
+}
 
 export default function AdminApplicationsPage() {
-  const { toast } = useToast();
-  const [status, setStatus] = useState<ApplicationStatus | "all">("pending");
+  const role = useAdminRole();
+  const canShowOverrides = canOverride(role) && !isReadOnly(role) && !isFinanceOnly(role);
 
-  const { data } = useQuery<{ applications: Enriched[] }>({
-    queryKey: ["/api/admin/applications", status !== "all" ? `?status=${status}` : ""],
-  });
-
-  const decideMut = useMutation({
-    mutationFn: async ({ id, status: s }: { id: string; status: ApplicationStatus }) =>
-      apiRequest("POST", `/api/admin/applications/${id}/decide`, { decision: s }),
-    onSuccess: () => {
-      toast({ title: "Decision saved" });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/applications"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/summary"] });
+  const { data, isLoading } = useQuery<{ applications: AdminApplication[] }>({
+    queryKey: ["/api/admin/applications"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/applications");
+      return res.json() as Promise<{ applications: AdminApplication[] }>;
     },
   });
 
-  const apps = data?.applications || [];
+  const statusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: "approved" | "rejected" }) => {
+      const res = await apiRequest("PATCH", `/api/admin/applications/${id}/status`, { status });
+      return res.json() as Promise<{ application: Application }>;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/applications"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
+    },
+  });
+
+  const applications = data?.applications ?? [];
 
   return (
-    <AdminShell title="Applications" subtitle={`${apps.length} total`}>
-      <div className="flex gap-2 mb-5">
-        {STATUS_OPTIONS.map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatus(s)}
-            className={cn(
-              "h-9 px-4 rounded-lg text-xs font-bold uppercase tracking-widest capitalize hover-elevate",
-              status === s ? "bg-primary text-primary-foreground" : "bg-card border border-border text-muted-foreground"
+    <AdminShell title="Applications" subtitle={`${applications.length} total`}>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <table className="w-full text-sm">
+          <thead className="border-b border-border bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-4 py-3">Creator</th>
+              <th className="px-4 py-3">Campaign</th>
+              <th className="px-4 py-3">Brand</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Applied</th>
+              <th className="px-4 py-3 text-right">Overrides</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading && (
+              <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">Loading applications...</td></tr>
             )}
-            data-testid={`filter-${s}`}
-          >
-            {s}
-          </button>
-        ))}
-      </div>
-
-      <div className="space-y-3">
-        {apps.length === 0 ? (
-          <div className="bg-card border border-border rounded-2xl p-16 text-center text-muted-foreground">
-            No applications match
-          </div>
-        ) : (
-          apps.map((a) => (
-            <div key={a.id} className="bg-card border border-border rounded-2xl p-4">
-              <div className="grid grid-cols-[1fr_auto] gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3 mb-2">
-                    {a.creator && (
-                      <img src={a.creator.avatar_url || ""} alt="" className="size-10 rounded-full object-cover" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="font-bold text-sm flex items-center gap-1">
-                        {a.creator?.full_name || "Unknown"}
-                        {a.creator?.verified_pro && <Icon name="verified" filled className="text-primary text-[13px]" />}
-                      </div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        applied for <span className="font-semibold text-foreground">{a.campaign?.title || "unknown campaign"}</span>
-                      </div>
+            {!isLoading && applications.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">No applications found.</td></tr>
+            )}
+            {applications.map((application) => {
+              const status = uiStatus(application.status);
+              return (
+                <tr key={application.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-4 font-semibold">{application.creator?.full_name ?? "Unknown creator"}</td>
+                  <td className="px-4 py-4 text-muted-foreground">{application.campaign?.title ?? "Unknown campaign"}</td>
+                  <td className="px-4 py-4 text-muted-foreground">{application.brand?.name ?? "Unknown brand"}</td>
+                  <td className="px-4 py-4"><span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold capitalize">{status}</span></td>
+                  <td className="px-4 py-4 text-muted-foreground">{fmtDate(application.applied_at)}</td>
+                  <td className="px-4 py-4">
+                    <div className="flex justify-end gap-2">
+                      {canShowOverrides && status !== "approved" && (
+                        <Button size="sm" onClick={() => statusMutation.mutate({ id: application.id, status: "approved" })} data-testid={`btn-override-approve-${application.id}`}>Approve</Button>
+                      )}
+                      {canShowOverrides && status !== "rejected" && (
+                        <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate({ id: application.id, status: "rejected" })} data-testid={`btn-override-reject-${application.id}`}>Reject</Button>
+                      )}
                     </div>
-                  </div>
-                  {a.pitch && (
-                    <p className="text-sm text-muted-foreground bg-background/50 border border-border rounded-xl p-3 mt-2 italic">
-                      "{a.pitch}"
-                    </p>
-                  )}
-                  <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                    <span>Applied {timeAgo(a.applied_at)}</span>
-                    {a.decided_at && <span>· decided {fmtDate(a.decided_at)}</span>}
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-2 shrink-0">
-                  <span className={cn(
-                    "text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full",
-                    a.status === "pending" ? "bg-amber-500/15 text-amber-400" :
-                    a.status === "accepted" ? "bg-green-500/15 text-green-400" :
-                    a.status === "rejected" ? "bg-red-500/15 text-red-400" :
-                    "bg-muted text-muted-foreground"
-                  )}>
-                    {a.status}
-                  </span>
-                  {a.status === "pending" && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => decideMut.mutate({ id: a.id, status: "rejected" })}
-                        className="h-8 px-3 rounded-lg bg-red-500/10 text-red-400 text-xs font-bold hover-elevate"
-                        data-testid={`button-reject-${a.id}`}
-                      >
-                        Reject
-                      </button>
-                      <button
-                        onClick={() => decideMut.mutate({ id: a.id, status: "accepted" })}
-                        className="h-8 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-bold hover-elevate glow-primary"
-                        data-testid={`button-accept-${a.id}`}
-                      >
-                        Accept
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))
-        )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </AdminShell>
   );

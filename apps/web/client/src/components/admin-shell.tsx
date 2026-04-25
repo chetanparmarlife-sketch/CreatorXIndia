@@ -4,6 +4,7 @@ import { CreatorXMark, Icon } from "./brand";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import ImpersonationBanner from "@/pages/admin/impersonation-banner";
+import { isReadOnly, useAdminRole, type AdminRole } from "@/hooks/useAdminRole";
 
 const NAV = [
   { href: "/admin", icon: "dashboard", label: "Dashboard" },
@@ -19,6 +20,17 @@ const NAV = [
   { href: "/admin/audit", icon: "history", label: "Audit log" },
 ];
 
+function navForRole(role: AdminRole) {
+  const labelsByRole: Record<AdminRole, string[]> = {
+    admin_readonly: ["Dashboard", "Brands", "Campaigns", "Creators", "Audit log"],
+    admin_finance: ["Dashboard", "Payouts", "KYC queue", "Audit log"],
+    admin_support: ["Dashboard", "Brands", "Campaigns", "Applications", "Deliverables", "Creators", "KYC queue", "Audit log"],
+    admin_ops: NAV.map((item) => item.label),
+  };
+  const allowed = new Set(labelsByRole[role]);
+  return NAV.filter((item) => allowed.has(item.label));
+}
+
 export function AdminShell({ children, title, subtitle, actions }: {
   children: ReactNode;
   title?: string;
@@ -27,6 +39,8 @@ export function AdminShell({ children, title, subtitle, actions }: {
 }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const adminRole = useAdminRole();
+  const navItems = navForRole(adminRole);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -43,7 +57,7 @@ export function AdminShell({ children, title, subtitle, actions }: {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {NAV.map((item) => {
+          {navItems.map((item) => {
             const active =
               item.href === "/admin" ? location === "/admin" : location.startsWith(item.href);
             return (
@@ -93,6 +107,14 @@ export function AdminShell({ children, title, subtitle, actions }: {
               {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
             </div>
             <div className="flex items-center gap-2 shrink-0">{actions}</div>
+            {isReadOnly(adminRole) && (
+              <span
+                className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-bold uppercase tracking-wide text-muted-foreground"
+                data-testid="badge-readonly"
+              >
+                View Only
+              </span>
+            )}
           </header>
         )}
         <div className="px-8 py-6">

@@ -1,165 +1,107 @@
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AdminShell } from "@/components/admin-shell";
 import { Icon } from "@/components/brand";
-import { fmtMoney, fmtCompact } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { fmtCompact, fmtMoney } from "@/lib/format";
+import { isFinanceOnly, isReadOnly, useAdminRole } from "@/hooks/useAdminRole";
+import { apiRequest } from "@/lib/queryClient";
 
-type Summary = {
+type AdminDashboardStats = {
+  totalBrands: number;
   activeCampaigns: number;
-  creators: number;
-  verifiedCreators: number;
-  gmvCents: number;
-  pendingPayouts: number;
-  pendingPayoutCents: number;
-  pendingApplications: number;
-  pendingDeliverables: number;
-  daily: { date: string; cents: number }[];
+  totalCreators: number;
+  platformRevenuePaise: number;
+  campaignSignups30d: Array<{ date: string; count: number }>;
+  revenue30d: Array<{ date: string; amountPaise: number }>;
 };
 
 export default function AdminDashboardPage() {
-  const { data } = useQuery<Summary>({ queryKey: ["/api/admin/summary"] });
+  const role = useAdminRole();
+  const financeOnly = isFinanceOnly(role);
+  const readOnly = isReadOnly(role);
+  const { data, isLoading } = useQuery<AdminDashboardStats>({
+    queryKey: ["/api/admin/dashboard-stats"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/dashboard-stats");
+      return res.json() as Promise<AdminDashboardStats>;
+    },
+  });
 
-  if (!data) {
+  if (isLoading || !data) {
     return (
       <AdminShell title="Dashboard">
-        <div className="h-96 flex items-center justify-center">
+        <div className="flex h-96 items-center justify-center">
           <Icon name="progress_activity" className="animate-spin text-[28px] text-muted-foreground" />
         </div>
       </AdminShell>
     );
   }
 
-  const maxDaily = Math.max(1, ...data.daily.map((d) => d.cents));
-  const total30 = data.daily.reduce((a, d) => a + d.cents, 0);
-
   return (
-    <AdminShell title="Overview" subtitle="What's happening across CreatorX right now">
-      {/* Top stats */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <StatCard
-          icon="paid"
-          label="GMV lifetime"
-          value={fmtMoney(data.gmvCents, { compact: true })}
-          accent
-          href="/admin/payouts"
-        />
-        <StatCard
-          icon="campaign"
-          label="Active campaigns"
-          value={String(data.activeCampaigns)}
-          href="/admin/campaigns"
-        />
-        <StatCard
-          icon="groups"
-          label="Creators"
-          value={fmtCompact(data.creators)}
-          sub={`${data.verifiedCreators} verified`}
-          href="/admin/creators"
-        />
-        <StatCard
-          icon="account_balance_wallet"
-          label="Pending payouts"
-          value={fmtMoney(data.pendingPayoutCents)}
-          sub={`${data.pendingPayouts} requests`}
-          href="/admin/payouts"
-          warn={data.pendingPayouts > 0}
-        />
+    <AdminShell title="Overview" subtitle="Platform-wide CreatorX health">
+      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Total Brands" value={fmtCompact(data.totalBrands)} testId="kpi-total-brands" href={financeOnly ? undefined : "/admin/brands"} />
+        <KpiCard label="Active Campaigns" value={fmtCompact(data.activeCampaigns)} testId="kpi-active-campaigns" href={financeOnly ? undefined : "/admin/campaigns"} />
+        <KpiCard label="Total Creators" value={fmtCompact(data.totalCreators)} testId="kpi-total-creators" href={financeOnly ? undefined : "/admin/creators"} />
+        <KpiCard label="Platform Revenue" value={fmtMoney(data.platformRevenuePaise, { compact: true })} testId="kpi-platform-revenue" href="/admin/payouts" />
       </div>
 
-      {/* Queues */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <QueueCard
-          label="Applications awaiting decision"
-          count={data.pendingApplications}
-          icon="fact_check"
-          href="/admin/applications"
-        />
-        <QueueCard
-          label="Deliverables in review"
-          count={data.pendingDeliverables}
-          icon="movie"
-          href="/admin/deliverables"
-        />
-      </div>
+      {!financeOnly && !readOnly && (
+        <div className="mb-6 rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          Admin operations can manage campaign, application, and deliverable overrides from the queue pages.
+        </div>
+      )}
 
-      {/* Chart */}
-      <section className="bg-card border border-border rounded-2xl p-6 mb-6">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <div className="text-xs text-muted-foreground uppercase tracking-widest font-bold">
-              Earnings · last 30 days
-            </div>
-            <div className="text-3xl font-black mt-1">{fmtMoney(total30)}</div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="rounded-2xl border border-border bg-card p-5" data-testid="chart-campaign-signups">
+          <div className="mb-4">
+            <h2 className="font-bold">Campaign signups</h2>
+            <p className="text-xs text-muted-foreground">Last 30 days</p>
           </div>
-          <div className="flex items-center gap-1 text-xs font-bold text-green-400 bg-green-500/15 rounded-full px-2.5 py-1">
-            <Icon name="trending_up" className="text-[14px]" />
-            Trending
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={data.campaignSignups30d}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(value: string) => value.slice(5)} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 10 }} />
+                <Tooltip />
+                <Line type="monotone" dataKey="count" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
-        </div>
-        <div className="flex items-end gap-1 h-40">
-          {data.daily.map((d, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center gap-1.5">
-              <div className="w-full relative" style={{ height: "100%" }}>
-                <div
-                  className={cn(
-                    "absolute bottom-0 left-0 right-0 rounded transition-all",
-                    i === data.daily.length - 1 ? "bg-primary" : "bg-primary/50"
-                  )}
-                  style={{ height: `${(d.cents / maxDaily) * 100}%`, minHeight: d.cents > 0 ? 2 : 1 }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="flex justify-between text-[10px] text-muted-foreground font-semibold mt-2">
-          <span>{new Date(data.daily[0].date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-          <span>Today</span>
-        </div>
-      </section>
+        </section>
+
+        <section className="rounded-2xl border border-border bg-card p-5" data-testid="chart-revenue">
+          <div className="mb-4">
+            <h2 className="font-bold">Revenue</h2>
+            <p className="text-xs text-muted-foreground">Last 30 days</p>
+          </div>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data.revenue30d}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(value: string) => value.slice(5)} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={(value: number) => fmtMoney(value, { compact: true })} />
+                <Tooltip formatter={(value: number) => fmtMoney(value)} />
+                <Bar dataKey="amountPaise" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      </div>
     </AdminShell>
   );
 }
 
-function StatCard({ icon, label, value, sub, accent, warn, href }: {
-  icon: string; label: string; value: string; sub?: string; accent?: boolean; warn?: boolean; href?: string;
-}) {
-  const Wrapper: any = href ? Link : "div";
-  return (
-    <Wrapper
-      href={href}
-      className={cn(
-        "block p-5 bg-card border border-border rounded-2xl hover-elevate transition-colors",
-        warn && "border-amber-500/40",
-      )}
-    >
-      <div className="flex items-center justify-between mb-3">
-        <div className={cn(
-          "size-10 rounded-xl flex items-center justify-center",
-          accent ? "bg-primary/15 text-primary" : warn ? "bg-amber-500/15 text-amber-400" : "bg-muted text-muted-foreground"
-        )}>
-          <Icon name={icon} filled className="text-[18px]" />
-        </div>
-        {href && <Icon name="arrow_forward" className="text-muted-foreground text-[16px]" />}
-      </div>
-      <div className="text-[10px] uppercase tracking-widest font-bold text-muted-foreground">{label}</div>
-      <div className="text-2xl font-black mt-1">{value}</div>
-      {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}
-    </Wrapper>
+function KpiCard({ label, value, testId, href }: { label: string; value: string; testId: string; href?: string }) {
+  const content = (
+    <div className="rounded-2xl border border-border bg-card p-5 hover-elevate" data-testid={testId}>
+      <div className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-2 text-3xl font-black">{value}</div>
+    </div>
   );
-}
 
-function QueueCard({ label, count, icon, href }: { label: string; count: number; icon: string; href: string }) {
-  return (
-    <Link href={href} className="flex items-center gap-4 p-5 bg-card border border-border rounded-2xl hover-elevate">
-      <div className="size-12 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
-        <Icon name={icon} filled className="text-[22px]" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-muted-foreground font-semibold">{label}</div>
-        <div className="text-2xl font-black">{count}</div>
-      </div>
-      <Icon name="chevron_right" className="text-muted-foreground" />
-    </Link>
-  );
+  if (!href) return content;
+  return <Link href={href}>{content}</Link>;
 }

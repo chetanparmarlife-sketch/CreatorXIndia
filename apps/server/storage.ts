@@ -393,6 +393,50 @@ export interface IStorage {
   ): Promise<Record<string, boolean>>;
   getAllBrands(): Promise<Brand[]>;
   updateBrandStatus(brandId: string, status: "approved" | "rejected", reason?: string, actorUserId?: string): Promise<Brand | null>;
+  getAllCampaigns(status?: string): Promise<Array<Campaign & { brand: Brand | null; brand_name: string | null }>>;
+  adminUpdateCampaignStatus(
+    campaignId: string,
+    status: "active" | "rejected" | "paused" | "completed",
+    actorUserId: string,
+  ): Promise<Campaign | null>;
+  getAllApplications(): Promise<Array<Application & {
+    creator: Profile | null;
+    campaign: Campaign | null;
+    brand: Brand | null;
+  }>>;
+  adminUpdateApplicationStatus(
+    applicationId: string,
+    status: "approved" | "rejected",
+    actorUserId: string,
+  ): Promise<Application | null>;
+  getAllDeliverables(): Promise<Array<Deliverable & {
+    creator: Profile | null;
+    campaign: Campaign | null;
+    brand: Brand | null;
+  }>>;
+  adminUpdateDeliverableStatus(
+    deliverableId: string,
+    status: "approved" | "rejected",
+    rejectionReason: string | undefined,
+    actorUserId: string,
+  ): Promise<Deliverable | null>;
+  getAdminDashboardStats(): Promise<{
+    totalBrands: number;
+    activeCampaigns: number;
+    totalCreators: number;
+    platformRevenuePaise: number;
+    campaignSignups30d: Array<{ date: string; count: number }>;
+    revenue30d: Array<{ date: string; amountPaise: number }>;
+  }>;
+  getAuditLog(params: {
+    actor?: string;
+    action?: string;
+    targetType?: string;
+    from?: string;
+    to?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ rows: AuditLog[]; nextCursor: string | null }>;
 }
 
 export async function resetDb(): Promise<void> {
@@ -2229,6 +2273,253 @@ export async function updateBrandStatus(
   if (!row) return null;
   await writeAudit(actorUserId, "update_brand_status", "brand", brandId, { status, reason });
   return row;
+}
+
+function mapAdminCampaignStatus(status?: string): Campaign["status"] | undefined {
+  if (!status || status === "all") return undefined;
+  if (status === "active") return "open";
+  if (status === "paused") return "closed";
+  if (status === "draft" || status === "completed" || status === "rejected") return status;
+  return undefined;
+}
+
+function toCampaignStorageStatus(status: "active" | "rejected" | "paused" | "completed"): Campaign["status"] {
+  if (status === "active") return "open";
+  if (status === "paused") return "closed";
+  return status;
+}
+
+export async function getAllCampaigns(status?: string): Promise<Array<Campaign & { brand: Brand | null; brand_name: string | null }>> {
+  await ensureSeeded();
+  const mappedStatus = mapAdminCampaignStatus(status);
+  const [campaignRows, brandRows] = await Promise.all([
+    db.select().from(campaignsTable),
+    db.select().from(brandsTable),
+  ]);
+  const brandById = new Map(brandRows.map((brand) => [brand.id, brand]));
+  const filtered = mappedStatus ? campaignRows.filter((campaign) => campaign.status === mappedStatus) : campaignRows;
+
+  return sortDescBy(filtered).map((campaign) => {
+    const brand = brandById.get(campaign.brand_id) ?? null;
+    return {
+      ...campaign,
+      brand,
+      brand_name: brand?.name ?? null,
+    };
+  });
+}
+
+export async function adminUpdateCampaignStatus(
+  campaignId: string,
+  status: "active" | "rejected" | "paused" | "completed",
+  actorUserId: string,
+): Promise<Campaign | null> {
+  await ensureSeeded();
+  const current = await campaigns.byId(campaignId);
+  if (!current) return null;
+
+  const nextStatus = toCampaignStorageStatus(status);
+  const allowed =
+    (current.status === "draft" && (nextStatus === "open" || nextStatus === "rejected")) ||
+    (current.status === "open" && (nextStatus === "closed" || nextStatus === "completed")) ||
+    (current.status === "closed" && nextStatus === "open");
+
+  if (!allowed) {
+    throw new Error("Invalid status transition");
+  }
+
+  const [updated] = await db
+    .update(campaignsTable)
+    .set({ status: nextStatus })
+    .where(eq(campaignsTable.id, campaignId))
+    .returning();
+
+  if (!updated) return null;
+  await writeAudit(actorUserId, "admin_update_campaign_status", "campaign", campaignId, {
+    from: current.status,
+    to: nextStatus,
+  });
+  return updated;
+}
+
+export async function getAllApplications(): Promise<Array<Application & {
+  creator: Profile | null;
+  campaign: Campaign | null;
+  brand: Brand | null;
+}>> {
+  await ensureSeeded();
+  const [applicationRows, profileRows, campaignRows, brandRows] = await Promise.all([
+    db.select().from(applicationsTable),
+    db.select().from(profilesTable),
+    db.select().from(campaignsTable),
+    db.select().from(brandsTable),
+  ]);
+
+  const profileById = new Map(profileRows.map((profile) => [profile.id, profile]));
+  const campaignById = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
+  const brandById = new Map(brandRows.map((brand) => [brand.id, brand]));
+
+  return [...applicationRows]
+    .sort((a, b) => (a.applied_at < b.applied_at ? 1 : -1))
+    .map((application) => {
+      const campaign = campaignById.get(application.campaign_id) ?? null;
+      return {
+        ...application,
+        creator: profileById.get(application.creator_id) ?? null,
+        campaign,
+        brand: campaign ? brandById.get(campaign.brand_id) ?? null : null,
+      };
+    });
+}
+
+export async function adminUpdateApplicationStatus(
+  applicationId: string,
+  status: "approved" | "rejected",
+  actorUserId: string,
+): Promise<Application | null> {
+  const decision: "accepted" | "rejected" = status === "approved" ? "accepted" : "rejected";
+  const row = await applications.decide(applicationId, decision, actorUserId);
+  if (!row) return null;
+  await writeAudit(actorUserId, "admin_override_application_status", "application", applicationId, { status });
+  return row;
+}
+
+export async function getAllDeliverables(): Promise<Array<Deliverable & {
+  creator: Profile | null;
+  campaign: Campaign | null;
+  brand: Brand | null;
+}>> {
+  await ensureSeeded();
+  const [deliverableRows, profileRows, campaignRows, brandRows] = await Promise.all([
+    db.select().from(deliverablesTable),
+    db.select().from(profilesTable),
+    db.select().from(campaignsTable),
+    db.select().from(brandsTable),
+  ]);
+
+  const profileById = new Map(profileRows.map((profile) => [profile.id, profile]));
+  const campaignById = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
+  const brandById = new Map(brandRows.map((brand) => [brand.id, brand]));
+
+  return [...deliverableRows]
+    .sort((a, b) => ((a.submitted_at ?? a.decided_at ?? "") < (b.submitted_at ?? b.decided_at ?? "") ? 1 : -1))
+    .map((deliverable) => {
+      const campaign = campaignById.get(deliverable.campaign_id) ?? null;
+      return {
+        ...deliverable,
+        creator: profileById.get(deliverable.creator_id) ?? null,
+        campaign,
+        brand: campaign ? brandById.get(campaign.brand_id) ?? null : null,
+      };
+    });
+}
+
+export async function adminUpdateDeliverableStatus(
+  deliverableId: string,
+  status: "approved" | "rejected",
+  rejectionReason: string | undefined,
+  actorUserId: string,
+): Promise<Deliverable | null> {
+  if (status === "rejected" && !rejectionReason) {
+    throw new Error("rejection_reason is required when rejecting");
+  }
+  const row = await deliverables.decide(deliverableId, status, rejectionReason ?? "", actorUserId);
+  if (!row) return null;
+  await writeAudit(actorUserId, "admin_override_deliverable_status", "deliverable", deliverableId, {
+    status,
+    rejection_reason: rejectionReason,
+  });
+  return row;
+}
+
+function last30DayKeys(): string[] {
+  const days: string[] = [];
+  for (let i = 29; i >= 0; i -= 1) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    days.push(date.toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+function platformFeeForTransaction(transaction: Transaction, campaignById: Map<string, Campaign>): number {
+  const campaign = transaction.reference_id ? campaignById.get(transaction.reference_id) : null;
+  if (!campaign) return 0;
+  return Math.round((transaction.amount_cents * campaign.commission_pct) / 100);
+}
+
+export async function getAdminDashboardStats(): Promise<{
+  totalBrands: number;
+  activeCampaigns: number;
+  totalCreators: number;
+  platformRevenuePaise: number;
+  campaignSignups30d: Array<{ date: string; count: number }>;
+  revenue30d: Array<{ date: string; amountPaise: number }>;
+}> {
+  await ensureSeeded();
+  const [brandRows, campaignRows, profileRows, transactionRows] = await Promise.all([
+    db.select().from(brandsTable),
+    db.select().from(campaignsTable),
+    db.select().from(profilesTable),
+    db.select().from(transactionsTable),
+  ]);
+
+  const campaignById = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
+  const earningTransactions = transactionRows.filter((transaction) => transaction.kind === "earning" && transaction.status === "completed");
+  const days = last30DayKeys();
+
+  return {
+    totalBrands: brandRows.length,
+    activeCampaigns: campaignRows.filter((campaign) => campaign.status === "open").length,
+    totalCreators: profileRows.filter((profile) => profile.role === "creator").length,
+    platformRevenuePaise: earningTransactions.reduce((sum, transaction) => sum + platformFeeForTransaction(transaction, campaignById), 0),
+    campaignSignups30d: days.map((date) => ({
+      date,
+      count: campaignRows.filter((campaign) => campaign.created_at.slice(0, 10) === date).length,
+    })),
+    revenue30d: days.map((date) => ({
+      date,
+      amountPaise: earningTransactions
+        .filter((transaction) => transaction.created_at.slice(0, 10) === date)
+        .reduce((sum, transaction) => sum + platformFeeForTransaction(transaction, campaignById), 0),
+    })),
+  };
+}
+
+export async function getAuditLog(params: {
+  actor?: string;
+  action?: string;
+  targetType?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}): Promise<{ rows: AuditLog[]; nextCursor: string | null }> {
+  await ensureSeeded();
+  const limit = Math.min(Math.max(params.limit ?? 50, 1), 50);
+  const fromTime = params.from ? new Date(`${params.from}T00:00:00.000Z`).getTime() : null;
+  const toTime = params.to ? new Date(`${params.to}T23:59:59.999Z`).getTime() : null;
+
+  let rows = await audit.list();
+  rows = rows.filter((row) => {
+    if (params.actor && !row.actor_user_id?.toLowerCase().includes(params.actor.toLowerCase())) return false;
+    if (params.action && !row.action.toLowerCase().includes(params.action.toLowerCase())) return false;
+    if (params.targetType && row.target_type !== params.targetType) return false;
+    const createdTime = new Date(row.created_at).getTime();
+    if (fromTime !== null && createdTime < fromTime) return false;
+    if (toTime !== null && createdTime > toTime) return false;
+    return true;
+  });
+
+  const startIndex = params.cursor ? rows.findIndex((row) => row.id === params.cursor) + 1 : 0;
+  const safeStartIndex = startIndex > 0 ? startIndex : 0;
+  const page = rows.slice(safeStartIndex, safeStartIndex + limit);
+  const nextRow = rows[safeStartIndex + limit];
+
+  return {
+    rows: page,
+    nextCursor: nextRow ? page[page.length - 1]?.id ?? null : null,
+  };
 }
 
 export const campaigns = {

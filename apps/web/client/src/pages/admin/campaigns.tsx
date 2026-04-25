@@ -1,361 +1,136 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { Link } from "wouter";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AdminShell } from "@/components/admin-shell";
-import { Icon } from "@/components/brand";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { fmtMoney, fmtDate } from "@/lib/format";
+import { fmtDate, fmtMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Campaign, Brand, CampaignStatus } from "@creatorx/schema";
+import { canApproveCampaigns, isFinanceOnly, isReadOnly, useAdminRole } from "@/hooks/useAdminRole";
+import type { Campaign } from "@creatorx/schema";
 
-type CampaignWithBrand = Campaign & { brand: Brand | null };
+type CampaignFilter = "all" | "draft" | "active" | "paused" | "completed";
+type AdminCampaign = Campaign & {
+  brand_name: string | null;
+  brand: { id: string; name: string } | null;
+};
 
-const STATUSES: (CampaignStatus | "all")[] = ["all", "open", "draft", "closed", "completed"];
+const FILTER_TABS: Array<{ value: CampaignFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "draft", label: "Draft" },
+  { value: "active", label: "Active" },
+  { value: "paused", label: "Paused" },
+  { value: "completed", label: "Completed" },
+];
+
+function toUiStatus(status: Campaign["status"]): "draft" | "active" | "paused" | "completed" | "rejected" {
+  if (status === "open") return "active";
+  if (status === "closed") return "paused";
+  if (status === "completed") return "completed";
+  if (status === "rejected") return "rejected";
+  return "draft";
+}
+
+function budgetForCampaign(campaign: Campaign): number {
+  return campaign.base_earning_cents * Math.max(campaign.slots_total, 1);
+}
 
 export default function AdminCampaignsPage() {
-  const [status, setStatus] = useState<CampaignStatus | "all">("all");
-  const [editing, setEditing] = useState<CampaignWithBrand | null>(null);
-  const [creating, setCreating] = useState(false);
+  const role = useAdminRole();
+  const [filter, setFilter] = useState<CampaignFilter>("all");
+  const canChangeCampaigns = canApproveCampaigns(role) && !isReadOnly(role) && !isFinanceOnly(role);
 
-  const { data } = useQuery<{ campaigns: CampaignWithBrand[] }>({
-    queryKey: ["/api/admin/campaigns"],
+  const { data, isLoading } = useQuery<{ campaigns: AdminCampaign[] }>({
+    queryKey: ["/api/admin/campaigns", filter],
+    queryFn: async () => {
+      const path = filter === "all" ? "/api/admin/campaigns" : `/api/admin/campaigns?status=${filter}`;
+      const res = await apiRequest("GET", path);
+      return res.json() as Promise<{ campaigns: AdminCampaign[] }>;
+    },
   });
 
-  const { data: brandsData } = useQuery<{ brands: Brand[] }>({
-    queryKey: ["/api/admin/brands"],
+  const statusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: "active" | "rejected" | "paused" | "completed" }) => {
+      const res = await apiRequest("PATCH", `/api/admin/campaigns/${id}/status`, { status });
+      return res.json() as Promise<{ campaign: Campaign }>;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/campaigns"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard-stats"] });
+    },
   });
 
-  const updateMut = useMutation({
-    mutationFn: async ({ id, patch }: { id: string; patch: Partial<Campaign> }) =>
-      apiRequest("PATCH", `/api/admin/campaigns/${id}`, patch),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/campaigns"] }),
-  });
-
-  const deleteMut = useMutation({
-    mutationFn: async (id: string) => apiRequest("DELETE", `/api/admin/campaigns/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/campaigns"] }),
-  });
-
-  const campaigns = (data?.campaigns || []).filter((c) => status === "all" || c.status === status);
-  const brands = brandsData?.brands || [];
+  const campaigns = data?.campaigns ?? [];
 
   return (
-    <AdminShell
-      title="Campaigns"
-      subtitle={`${campaigns.length} campaign${campaigns.length === 1 ? "" : "s"}`}
-      actions={
-        <Button
-          onClick={() => setCreating(true)}
-          className="h-9 px-4 rounded-lg font-bold text-sm glow-primary"
-          data-testid="button-new-campaign"
-        >
-          <Icon name="add" className="text-[18px] mr-1" />
-          New campaign
-        </Button>
-      }
-    >
-      {/* Status filter */}
-      <div className="flex gap-2 mb-5">
-        {STATUSES.map((s) => (
+    <AdminShell title="Campaigns" subtitle={`${campaigns.length} campaign${campaigns.length === 1 ? "" : "s"}`}>
+      <div className="mb-5 flex flex-wrap gap-2">
+        {FILTER_TABS.map((tab) => (
           <button
-            key={s}
-            onClick={() => setStatus(s)}
+            key={tab.value}
+            type="button"
+            onClick={() => setFilter(tab.value)}
             className={cn(
-              "h-9 px-4 rounded-lg text-xs font-bold uppercase tracking-widest capitalize hover-elevate",
-              status === s ? "bg-primary text-primary-foreground" : "bg-card border border-border text-muted-foreground"
+              "h-9 rounded-lg px-4 text-xs font-bold uppercase tracking-widest hover-elevate",
+              filter === tab.value ? "bg-primary text-primary-foreground" : "border border-border bg-card text-muted-foreground",
             )}
-            data-testid={`filter-${s}`}
+            data-testid={`tab-${tab.value}`}
           >
-            {s}
+            {tab.label}
           </button>
         ))}
       </div>
 
-      <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="grid grid-cols-[80px_1fr_160px_120px_140px_120px_100px] gap-3 px-5 py-3 text-[10px] uppercase tracking-widest font-bold text-muted-foreground border-b border-border">
-          <div></div>
-          <div>Campaign</div>
-          <div>Brand</div>
-          <div>Earning</div>
-          <div>Slots</div>
-          <div>Status</div>
-          <div className="text-right">Actions</div>
-        </div>
-        {campaigns.length === 0 ? (
-          <div className="py-16 text-center text-muted-foreground">No campaigns match</div>
-        ) : (
-          campaigns.map((c) => (
-            <div key={c.id} className="grid grid-cols-[80px_1fr_160px_120px_140px_120px_100px] gap-3 px-5 py-3 items-center border-b border-border last:border-b-0">
-              <div className="size-14 rounded-xl overflow-hidden bg-muted">
-                {c.cover_image_url && <img src={c.cover_image_url} alt="" className="w-full h-full object-cover" />}
-              </div>
-              <button
-                onClick={() => setEditing(c)}
-                className="min-w-0 text-left hover-elevate -mx-2 px-2 py-1 rounded-lg"
-                data-testid={`button-edit-${c.id}`}
-              >
-                <div className="font-bold text-sm truncate">{c.title}</div>
-                <div className="text-xs text-muted-foreground truncate">{c.category}</div>
-              </button>
-              <div className="text-sm font-semibold truncate">{c.brand?.name || "—"}</div>
-              <div className="text-sm font-bold" style={{ color: "#6ea0ff" }}>{fmtMoney(c.base_earning_cents)}</div>
-              <div className="text-sm">
-                <span className="font-semibold">{c.slots_filled}</span>
-                <span className="text-muted-foreground">/{c.slots_total}</span>
-                <div className="text-[10px] text-muted-foreground">Apply by {fmtDate(c.apply_deadline)}</div>
-              </div>
-              <div>
-                <select
-                  value={c.status}
-                  onChange={(e) => updateMut.mutate({ id: c.id, patch: { status: e.target.value as CampaignStatus } })}
-                  className={cn(
-                    "h-7 px-2 rounded-lg text-[10px] uppercase tracking-widest font-bold border-0 outline-none",
-                    c.status === "open" ? "bg-primary/15 text-primary" :
-                    c.status === "draft" ? "bg-muted text-muted-foreground" :
-                    c.status === "closed" ? "bg-red-500/15 text-red-400" :
-                    "bg-green-500/15 text-green-400"
-                  )}
-                  data-testid={`select-status-${c.id}`}
-                >
-                  <option value="draft">Draft</option>
-                  <option value="open">Open</option>
-                  <option value="closed">Closed</option>
-                  <option value="completed">Completed</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-end gap-1">
-                <button
-                  onClick={() => { if (confirm(`Delete "${c.title}"?`)) deleteMut.mutate(c.id); }}
-                  className="size-8 rounded-lg bg-red-500/10 text-red-400 hover-elevate flex items-center justify-center"
-                  data-testid={`button-delete-${c.id}`}
-                >
-                  <Icon name="delete" className="text-[14px]" />
-                </button>
-              </div>
-            </div>
-          ))
-        )}
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <table className="w-full text-sm">
+          <thead className="border-b border-border bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-4 py-3">Title</th>
+              <th className="px-4 py-3">Brand</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Budget</th>
+              <th className="px-4 py-3">Created</th>
+              <th className="px-4 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading && (
+              <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">Loading campaigns...</td></tr>
+            )}
+            {!isLoading && campaigns.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">No campaigns found.</td></tr>
+            )}
+            {campaigns.map((campaign) => {
+              const uiStatus = toUiStatus(campaign.status);
+              return (
+                <tr key={campaign.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-4 font-semibold">{campaign.title}</td>
+                  <td className="px-4 py-4 text-muted-foreground">{campaign.brand_name ?? campaign.brand?.name ?? "Unknown"}</td>
+                  <td className="px-4 py-4"><span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold capitalize">{uiStatus}</span></td>
+                  <td className="px-4 py-4 font-semibold">{fmtMoney(budgetForCampaign(campaign))}</td>
+                  <td className="px-4 py-4 text-muted-foreground">{fmtDate(campaign.created_at)}</td>
+                  <td className="px-4 py-4">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {canChangeCampaigns && uiStatus === "draft" && (
+                        <>
+                          <Button size="sm" onClick={() => statusMutation.mutate({ id: campaign.id, status: "active" })} data-testid={`btn-approve-campaign-${campaign.id}`}>Approve</Button>
+                          <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate({ id: campaign.id, status: "rejected" })} data-testid={`btn-reject-campaign-${campaign.id}`}>Reject</Button>
+                        </>
+                      )}
+                      {canChangeCampaigns && uiStatus === "active" && (
+                        <Button size="sm" variant="outline" onClick={() => statusMutation.mutate({ id: campaign.id, status: "paused" })} data-testid={`btn-pause-campaign-${campaign.id}`}>Pause</Button>
+                      )}
+                      <Link href={`/admin/brands/${campaign.brand_id}/campaigns/${campaign.id}`}>
+                        <Button size="sm" variant="outline" data-testid={`btn-view-campaign-${campaign.id}`}>View</Button>
+                      </Link>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-
-      {creating && (
-        <CampaignDialog
-          campaign={null}
-          brands={brands}
-          onClose={() => setCreating(false)}
-        />
-      )}
-      {editing && (
-        <CampaignDialog
-          campaign={editing}
-          brands={brands}
-          onClose={() => setEditing(null)}
-        />
-      )}
     </AdminShell>
-  );
-}
-
-function CampaignDialog({
-  campaign,
-  brands,
-  onClose,
-}: {
-  campaign: Campaign | null;
-  brands: Brand[];
-  onClose: () => void;
-}) {
-  const isEdit = !!campaign;
-  const [title, setTitle] = useState(campaign?.title || "");
-  const [brandId, setBrandId] = useState(campaign?.brand_id || brands[0]?.id || "");
-  const [category, setCategory] = useState(campaign?.category || "Beauty");
-  const [description, setDescription] = useState(campaign?.description || "");
-  const [coverImage, setCoverImage] = useState(campaign?.cover_image_url || "");
-  const [baseEarning, setBaseEarning] = useState(
-    campaign ? (campaign.base_earning_cents / 100).toString() : "500"
-  );
-  const [slotsTotal, setSlotsTotal] = useState(campaign?.slots_total?.toString() || "5");
-  const [applyDeadline, setApplyDeadline] = useState(
-    campaign?.apply_deadline?.slice(0, 10) ||
-      new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
-  );
-  const [draftDeadline, setDraftDeadline] = useState(
-    campaign?.draft_deadline?.slice(0, 10) ||
-      new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10)
-  );
-  const [liveDate, setLiveDate] = useState(
-    campaign?.live_date?.slice(0, 10) ||
-      new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10)
-  );
-  const [status, setStatus] = useState<CampaignStatus>(campaign?.status || "draft");
-
-  const saveMut = useMutation({
-    mutationFn: async () => {
-      const payload = {
-        brand_id: brandId,
-        title,
-        category,
-        description,
-        cover_image_url: coverImage || null,
-        base_earning_cents: Math.round(parseFloat(baseEarning || "0") * 100),
-        slots_total: parseInt(slotsTotal || "1", 10),
-        apply_deadline: new Date(applyDeadline).toISOString(),
-        draft_deadline: new Date(draftDeadline).toISOString(),
-        live_date: new Date(liveDate).toISOString(),
-        status,
-      };
-      if (isEdit) {
-        return apiRequest("PATCH", `/api/admin/campaigns/${campaign!.id}`, payload);
-      }
-      return apiRequest("POST", `/api/admin/campaigns`, {
-        ...payload,
-        commission_pct: 0,
-        product_bonus: false,
-        tags: [],
-        platforms: ["instagram"],
-        deliverables: [{ kind: "Instagram Reel", qty: 1, spec: "30-60s vertical" }],
-        dos: [],
-        donts: [],
-        featured: false,
-        high_ticket: false,
-        slots_filled: 0,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/campaigns"] });
-      onClose();
-    },
-  });
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="bg-card border-border max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit campaign" : "New campaign"}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 pt-2">
-          <div>
-            <Label className="text-xs text-muted-foreground">Title</Label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Summer Skincare Summit"
-              data-testid="input-title"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Brand</Label>
-              <select
-                value={brandId}
-                onChange={(e) => setBrandId(e.target.value)}
-                className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm"
-                data-testid="select-brand"
-              >
-                {brands.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Category</Label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm"
-                data-testid="select-category"
-              >
-                <option>Beauty</option>
-                <option>Tech</option>
-                <option>Fashion</option>
-                <option>Lifestyle</option>
-                <option>Food</option>
-                <option>Gifting</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Description</Label>
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              data-testid="input-description"
-            />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Cover image URL</Label>
-            <Input
-              value={coverImage}
-              onChange={(e) => setCoverImage(e.target.value)}
-              placeholder="https://..."
-              data-testid="input-cover"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Base earning (INR)</Label>
-              <Input
-                type="number"
-                value={baseEarning}
-                onChange={(e) => setBaseEarning(e.target.value)}
-                data-testid="input-earning"
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Total slots</Label>
-              <Input
-                type="number"
-                value={slotsTotal}
-                onChange={(e) => setSlotsTotal(e.target.value)}
-                data-testid="input-slots"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Apply by</Label>
-              <Input type="date" value={applyDeadline} onChange={(e) => setApplyDeadline(e.target.value)} />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Draft by</Label>
-              <Input type="date" value={draftDeadline} onChange={(e) => setDraftDeadline(e.target.value)} />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Live date</Label>
-              <Input type="date" value={liveDate} onChange={(e) => setLiveDate(e.target.value)} />
-            </div>
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Status</Label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value as CampaignStatus)}
-              className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm"
-              data-testid="select-status"
-            >
-              <option value="draft">Draft</option>
-              <option value="open">Open</option>
-              <option value="closed">Closed</option>
-              <option value="completed">Completed</option>
-            </select>
-          </div>
-          <div className="flex gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
-            <Button
-              onClick={() => saveMut.mutate()}
-              disabled={!title || !brandId || saveMut.isPending}
-              className="flex-1 glow-primary"
-              data-testid="button-save"
-            >
-              {saveMut.isPending ? "Saving..." : isEdit ? "Save changes" : "Create campaign"}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
