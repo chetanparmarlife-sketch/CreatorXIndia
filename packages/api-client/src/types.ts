@@ -36,6 +36,7 @@ export interface BrandProfile {
 export interface Campaign {
   id: string;
   brandId: string;
+  brandName?: string | null;
   title: string;
   description: string;
   niche: string;
@@ -43,10 +44,32 @@ export interface Campaign {
   deliverableType: string;
   budgetPaise: number;
   maxCreators: number;
+  applicantCount?: number;
   applicationDeadline: string;
   status: string;
   briefUrl?: string | null;
   createdAt: string;
+}
+
+export interface HomeStats {
+  activeApplications: number;
+  pendingDeliverables: number;
+  availableForWithdrawalPaise: number;
+}
+
+export interface PaginatedCampaigns {
+  campaigns: Campaign[];
+  nextCursor: string | null;
+}
+
+export interface CreatorApplication {
+  applicationId: string;
+  campaignId: string;
+  status: string;
+  appliedAt: string;
+  brandName: string | null;
+  deliverableStatus: string | null;
+  campaign: Campaign;
 }
 
 export interface EarningsSummary {

@@ -141,8 +141,50 @@ function sortAscBy<T extends { created_at: string }>(rows: T[]): T[] {
   return rows.sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
 }
 
+export interface CreatorHomeStats {
+  activeApplications: number;
+  pendingDeliverables: number;
+  availableForWithdrawalPaise: number;
+}
+
+export interface DiscoverCampaign extends Campaign {
+  brand_name: string | null;
+  brandName: string | null;
+  applicant_count: number;
+  applicantCount: number;
+}
+
+export type CreatorApplicationFilterStatus =
+  | Application["status"]
+  | "all"
+  | "applied"
+  | "active"
+  | "completed";
+
+export interface CreatorApplicationSummary {
+  applicationId: string;
+  campaignId: string;
+  status: Application["status"];
+  appliedAt: string;
+  brandName: string | null;
+  deliverableStatus: Deliverable["status"] | null;
+  campaign: DiscoverCampaign;
+}
+
 export interface IStorage {
   upsertPushToken(userId: string, token: string, platform: PushPlatform): Promise<void>;
+  getCreatorHomeStats(creatorId: string): Promise<CreatorHomeStats>;
+  discoverCampaigns(
+    filters: { search?: string; niche?: string },
+    cursor?: string,
+    limit?: number,
+  ): Promise<{ campaigns: DiscoverCampaign[]; nextCursor: string | null }>;
+  getCreatorApplications(
+    creatorId: string,
+    status?: CreatorApplicationFilterStatus,
+  ): Promise<CreatorApplicationSummary[]>;
+  markNotificationRead(notificationId: string, creatorId: string): Promise<boolean>;
+  markAllNotificationsRead(creatorId: string): Promise<void>;
   getBrandProfile(userId: string): Promise<Brand>;
   updateBrandProfile(
     userId: string,
@@ -1823,6 +1865,219 @@ export async function getCreatorPortfolio(creatorId: string): Promise<Array<{
     contentUrl: row.asset_url ?? row.live_url ?? "",
     approvedAt: row.decided_at ?? row.submitted_at ?? now(),
   }));
+}
+
+function campaignIsActiveForCreator(campaign: Campaign): boolean {
+  const deadlineTime = new Date(campaign.apply_deadline).getTime();
+  return campaign.status === "open" && !Number.isNaN(deadlineTime) && deadlineTime > Date.now();
+}
+
+function withCreatorCampaignFields(
+  campaign: Campaign,
+  brandById: Map<string, Brand>,
+  applicantCounts: Map<string, number>,
+): DiscoverCampaign {
+  const brandName = brandById.get(campaign.brand_id)?.name ?? null;
+  const applicantCount = applicantCounts.get(campaign.id) ?? 0;
+  return {
+    ...campaign,
+    brand_name: brandName,
+    brandName,
+    applicant_count: applicantCount,
+    applicantCount,
+  };
+}
+
+function isApplicationStatus(value: string): value is Application["status"] {
+  return value === "pending"
+    || value === "invited"
+    || value === "accepted"
+    || value === "rejected"
+    || value === "withdrawn";
+}
+
+export async function getCreatorHomeStats(creatorId: string): Promise<CreatorHomeStats> {
+  await ensureSeeded();
+
+  const [creatorApplications, creatorDeliverables, availableForWithdrawalPaise] = await Promise.all([
+    db.select().from(applicationsTable).where(eq(applicationsTable.creator_id, creatorId)),
+    db.select().from(deliverablesTable).where(eq(deliverablesTable.creator_id, creatorId)),
+    transactions.balanceCents(creatorId),
+  ]);
+
+  const activeApplications = creatorApplications.filter(
+    (application) =>
+      application.status === "pending" ||
+      application.status === "invited" ||
+      application.status === "accepted",
+  ).length;
+  const pendingDeliverables = creatorDeliverables.filter(
+    (deliverable) =>
+      deliverable.status === "pending" ||
+      deliverable.status === "submitted" ||
+      deliverable.status === "revision",
+  ).length;
+
+  return {
+    activeApplications,
+    pendingDeliverables,
+    availableForWithdrawalPaise,
+  };
+}
+
+export async function discoverCampaigns(
+  filters: { search?: string; niche?: string },
+  cursor?: string,
+  limit = 20,
+): Promise<{ campaigns: DiscoverCampaign[]; nextCursor: string | null }> {
+  await ensureSeeded();
+
+  const safeLimit = Math.max(1, Math.min(limit, 50));
+  const search = (filters.search ?? "").trim().toLowerCase();
+  const niche = filters.niche?.trim();
+
+  const [campaignRows, brandRows, applicationRows] = await Promise.all([
+    db.select().from(campaignsTable),
+    db.select().from(brandsTable),
+    db.select({ campaign_id: applicationsTable.campaign_id }).from(applicationsTable),
+  ]);
+
+  const brandById = new Map(brandRows.map((brand) => [brand.id, brand]));
+  const applicantCounts = new Map<string, number>();
+  for (const application of applicationRows) {
+    applicantCounts.set(application.campaign_id, (applicantCounts.get(application.campaign_id) ?? 0) + 1);
+  }
+
+  let filtered = campaignRows.filter(campaignIsActiveForCreator);
+
+  if (niche && niche !== "All") {
+    filtered = filtered.filter((campaign) => campaign.category === niche || campaign.required_niches.includes(niche));
+  }
+
+  if (search) {
+    filtered = filtered.filter((campaign) => {
+      const brandName = brandById.get(campaign.brand_id)?.name ?? "";
+      const haystack = `${campaign.title} ${campaign.description} ${campaign.category} ${brandName}`.toLowerCase();
+      return haystack.includes(search);
+    });
+  }
+
+  filtered.sort((a, b) => {
+    if (a.created_at === b.created_at) return a.id.localeCompare(b.id);
+    return a.created_at < b.created_at ? 1 : -1;
+  });
+
+  let startIndex = 0;
+  if (cursor) {
+    const cursorIndex = filtered.findIndex((campaign) => campaign.id === cursor);
+    if (cursorIndex >= 0) startIndex = cursorIndex + 1;
+  }
+
+  const slice = filtered.slice(startIndex, startIndex + safeLimit);
+  const hasMore = startIndex + safeLimit < filtered.length;
+  const nextCursor = hasMore ? slice[slice.length - 1]?.id ?? null : null;
+
+  return {
+    campaigns: slice.map((campaign) => withCreatorCampaignFields(campaign, brandById, applicantCounts)),
+    nextCursor,
+  };
+}
+
+export async function getCreatorApplications(
+  creatorId: string,
+  status?: CreatorApplicationFilterStatus,
+): Promise<CreatorApplicationSummary[]> {
+  await ensureSeeded();
+
+  const normalizedStatus = status === "all" ? undefined : status;
+  const [applicationRows, campaignRows, brandRows, deliverableRows] = await Promise.all([
+    db.select().from(applicationsTable).where(eq(applicationsTable.creator_id, creatorId)),
+    db.select().from(campaignsTable),
+    db.select().from(brandsTable),
+    db.select().from(deliverablesTable).where(eq(deliverablesTable.creator_id, creatorId)),
+  ]);
+
+  const campaignById = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
+  const brandById = new Map(brandRows.map((brand) => [brand.id, brand]));
+  const applicantCounts = new Map<string, number>();
+  for (const application of await db.select({ campaign_id: applicationsTable.campaign_id }).from(applicationsTable)) {
+    applicantCounts.set(application.campaign_id, (applicantCounts.get(application.campaign_id) ?? 0) + 1);
+  }
+
+  const deliverableByCampaign = new Map<string, Deliverable>();
+  const sortedDeliverables = [...deliverableRows].sort((a, b) => {
+    const aTime = a.submitted_at ?? a.decided_at ?? "";
+    const bTime = b.submitted_at ?? b.decided_at ?? "";
+    return aTime < bTime ? 1 : -1;
+  });
+  for (const deliverable of sortedDeliverables) {
+    if (!deliverableByCampaign.has(deliverable.campaign_id)) {
+      deliverableByCampaign.set(deliverable.campaign_id, deliverable);
+    }
+  }
+
+  let rows = applicationRows;
+  if (normalizedStatus === "applied") {
+    rows = rows.filter((application) => application.status === "pending" || application.status === "invited");
+  } else if (normalizedStatus === "active") {
+    rows = rows.filter((application) => application.status === "accepted");
+  } else if (normalizedStatus && normalizedStatus !== "completed" && isApplicationStatus(normalizedStatus)) {
+    rows = rows.filter((application) => application.status === normalizedStatus);
+  }
+
+  let summaries = rows
+    .map((application): CreatorApplicationSummary | null => {
+      const campaign = campaignById.get(application.campaign_id);
+      if (!campaign) return null;
+
+      const deliverable = deliverableByCampaign.get(campaign.id) ?? null;
+      return {
+        applicationId: application.id,
+        campaignId: application.campaign_id,
+        status: application.status,
+        appliedAt: application.applied_at,
+        brandName: brandById.get(campaign.brand_id)?.name ?? null,
+        deliverableStatus: deliverable?.status ?? null,
+        campaign: withCreatorCampaignFields(campaign, brandById, applicantCounts),
+      };
+    })
+    .filter((summary): summary is CreatorApplicationSummary => summary !== null);
+
+  if (normalizedStatus === "completed") {
+    summaries = summaries.filter(
+      (summary) =>
+        summary.campaign.status === "completed" ||
+        summary.deliverableStatus === "approved" ||
+        summary.deliverableStatus === "live",
+    );
+  }
+
+  return summaries.sort((a, b) => (a.appliedAt < b.appliedAt ? 1 : -1));
+}
+
+export async function markNotificationRead(notificationId: string, creatorId: string): Promise<boolean> {
+  await ensureSeeded();
+  const [current] = await db
+    .select()
+    .from(notificationsTable)
+    .where(and(eq(notificationsTable.id, notificationId), eq(notificationsTable.user_id, creatorId)))
+    .limit(1);
+
+  if (!current) return false;
+  if (current.read) return true;
+
+  await db
+    .update(notificationsTable)
+    .set({ read: true })
+    .where(and(eq(notificationsTable.id, notificationId), eq(notificationsTable.user_id, creatorId)));
+  await writeAudit(creatorId, "mark_creator_notification_read", "notification", notificationId, { read: true });
+  return true;
+}
+
+export async function markAllNotificationsRead(creatorId: string): Promise<void> {
+  await ensureSeeded();
+  await db.update(notificationsTable).set({ read: true }).where(eq(notificationsTable.user_id, creatorId));
+  await writeAudit(creatorId, "mark_all_creator_notifications_read", "notification", creatorId, { read_all: true });
 }
 
 export async function inviteCreatorToCampaign(

@@ -16,12 +16,15 @@ import {
   getAllBrands, updateBrandStatus,
   getAllCampaigns, adminUpdateCampaignStatus, getAllApplications, adminUpdateApplicationStatus,
   getAllDeliverables, adminUpdateDeliverableStatus, getAdminDashboardStats, getAuditLog,
+  getCreatorHomeStats, discoverCampaigns, getCreatorApplications,
+  markNotificationRead, markAllNotificationsRead,
 } from "./storage";
 import {
   INDIAN_NICHES,
   INDIAN_CITIES,
   INDIAN_LANGUAGES,
   type UserRole,
+  type Profile,
   type Campaign,
   type Application,
   type Deliverable,
@@ -71,6 +74,14 @@ const brandProfileSchema = z.object({
   ),
 });
 
+const creatorProfileUpdateSchema = z.object({
+  full_name: z.string().trim().min(1, "full_name is required").optional(),
+  bio: z.string().nullable().optional(),
+  niches: z.array(z.string()).optional(),
+  languages: z.array(z.string()).optional(),
+  avatar_url: z.string().nullable().optional(),
+}).strict();
+
 const campaignCreateSchema = z.object({
   title: z.string().trim().min(1, "title is required"),
   description: z.string().trim().min(1, "description is required"),
@@ -91,6 +102,17 @@ const campaignCreateSchema = z.object({
 });
 
 const brandCampaignStatusSchema = z.enum(["draft", "active", "paused", "completed"]);
+const creatorMyCampaignStatusSchema = z.enum([
+  "all",
+  "applied",
+  "active",
+  "completed",
+  "pending",
+  "invited",
+  "accepted",
+  "rejected",
+  "withdrawn",
+]);
 const campaignStatusUpdateSchema = z.object({
   status: z.enum(["paused", "active"]),
 });
@@ -214,6 +236,18 @@ function routeParam(req: Request, key: string): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function queryString(req: Request, key: string): string | undefined {
+  const value = req.query[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function queryLimit(req: Request, defaultValue: number, max: number): number {
+  const value = queryString(req, "limit");
+  const parsed = value ? Number.parseInt(value, 10) : defaultValue;
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.max(1, Math.min(parsed, max));
+}
+
 async function requireUser(req: Request, res: Response): Promise<string | null> {
   const uid = getUserId(req);
   if (!uid) {
@@ -263,6 +297,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api/kyc", requireAuth, requireRole("creator"));
   app.use("/api/payout-instruments", requireAuth, requireRole("creator"));
   app.use("/api/notifications", requireAuth, requireRole("creator"));
+  app.use("/api/creator", requireAuth, requireRole("creator"));
   app.use("/api/brand", (req, res, next) => {
     if (req.path === "/wallet/webhook") {
       next();
@@ -407,6 +442,103 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       return res.status(500).json({ error: "Internal Server Error" });
     }
+  });
+
+  // ------------------------------------------------------------------
+  // Creator mobile API
+  // ------------------------------------------------------------------
+  app.get("/api/creator/profile", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    res.json({ profile: await profiles.byId(uid), socials: await socials.forUser(uid) });
+  });
+
+  app.patch("/api/creator/profile", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorProfileUpdateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const patch: Partial<Profile> = { ...parsed.data };
+    const updated = await profiles.update(uid, patch);
+    return res.json({ profile: updated });
+  });
+
+  app.get("/api/creator/home-stats", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    return res.json(await getCreatorHomeStats(uid));
+  });
+
+  app.get("/api/creator/campaigns", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const status = queryString(req, "status");
+    const limit = queryLimit(req, 5, 20);
+
+    if (status && status !== "active" && status !== "open") {
+      return res.json({ campaigns: [] });
+    }
+
+    const result = await discoverCampaigns({}, undefined, limit);
+    return res.json({ campaigns: result.campaigns });
+  });
+
+  app.get("/api/creator/campaigns/discover", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const result = await discoverCampaigns(
+      {
+        search: queryString(req, "search"),
+        niche: queryString(req, "niche"),
+      },
+      queryString(req, "cursor"),
+      queryLimit(req, 20, 50),
+    );
+    return res.json(result);
+  });
+
+  app.get("/api/creator/my-campaigns", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const status = queryString(req, "status");
+    const parsedStatus = status === undefined ? undefined : creatorMyCampaignStatusSchema.safeParse(status);
+    if (parsedStatus && !parsedStatus.success) {
+      return res.status(400).json({ error: "Invalid status filter" });
+    }
+
+    return res.json({ applications: await getCreatorApplications(uid, parsedStatus?.data) });
+  });
+
+  app.get("/api/creator/earnings", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const me = await profiles.byId(uid);
+    return res.json({
+      balance_cents: await transactions.balanceCents(uid),
+      transactions: await transactions.forUser(uid),
+      withdrawals: await withdrawals.list({ user_id: uid }),
+      kyc_status: me?.kyc_status,
+      has_upi: !!me?.upi_id,
+      has_bank: !!(me?.bank_account_number && me?.bank_ifsc),
+      fy_earned_cents: me?.fy_earned_cents || 0,
+    });
+  });
+
+  app.get("/api/creator/notifications", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const limitParam = queryString(req, "limit");
+    const limit = limitParam ? queryLimit(req, 20, 50) : undefined;
+    const rows = await notifications.forUser(uid);
+    return res.json({ notifications: limit ? rows.slice(0, limit) : rows });
+  });
+
+  app.patch("/api/creator/notifications/read-all", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    await markAllNotificationsRead(uid);
+    return res.json({ ok: true });
+  });
+
+  app.patch("/api/creator/notifications/:id/read", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const didUpdate = await markNotificationRead(routeParam(req, "id"), uid);
+    if (!didUpdate) return res.status(404).json({ error: "Notification not found" });
+    return res.json({ ok: true });
   });
 
   // ------------------------------------------------------------------

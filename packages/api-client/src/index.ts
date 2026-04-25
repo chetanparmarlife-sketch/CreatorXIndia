@@ -4,11 +4,14 @@ import {
   type AuthResponse,
   type BrandProfile,
   type Campaign,
+  type CreatorApplication,
   type CreatorProfile,
   type DashboardStats,
   type EarningTransaction,
   type EarningsSummary,
+  type HomeStats,
   type Notification,
+  type PaginatedCampaigns,
 } from "./types";
 
 export { ApiError } from "./types";
@@ -16,11 +19,14 @@ export type {
   AuthResponse,
   BrandProfile,
   Campaign,
+  CreatorApplication,
   CreatorProfile,
   DashboardStats,
   EarningTransaction,
   EarningsSummary,
+  HomeStats,
   Notification,
+  PaginatedCampaigns,
 } from "./types";
 
 type HttpMethod = "GET" | "POST" | "PATCH";
@@ -142,6 +148,8 @@ const rawCampaignSchema = z.object({
   id: z.string(),
   brand_id: z.string().optional(),
   brandId: z.string().optional(),
+  brand_name: z.string().nullable().optional(),
+  brandName: z.string().nullable().optional(),
   title: z.string(),
   description: z.string(),
   category: z.string().optional(),
@@ -159,6 +167,8 @@ const rawCampaignSchema = z.object({
   max_creators: z.number().optional(),
   maxCreators: z.number().optional(),
   slots_total: z.number().optional(),
+  applicant_count: z.number().optional(),
+  applicantCount: z.number().optional(),
   application_deadline: z.string().optional(),
   applicationDeadline: z.string().optional(),
   apply_deadline: z.string().optional(),
@@ -173,8 +183,32 @@ const campaignListResponseSchema = z.object({
   campaigns: z.array(rawCampaignSchema),
 }).passthrough();
 
+const paginatedCampaignsResponseSchema = campaignListResponseSchema.extend({
+  nextCursor: z.string().nullable(),
+});
+
 const campaignDetailResponseSchema = z.object({
   campaign: rawCampaignSchema,
+}).passthrough();
+
+const homeStatsSchema = z.object({
+  activeApplications: z.number(),
+  pendingDeliverables: z.number(),
+  availableForWithdrawalPaise: z.number(),
+});
+
+const rawCreatorApplicationSchema = z.object({
+  applicationId: z.string(),
+  campaignId: z.string(),
+  status: z.string(),
+  appliedAt: z.string(),
+  brandName: z.string().nullable().optional(),
+  deliverableStatus: z.string().nullable().optional(),
+  campaign: rawCampaignSchema,
+}).passthrough();
+
+const creatorApplicationsResponseSchema = z.object({
+  applications: z.array(rawCreatorApplicationSchema),
 }).passthrough();
 
 const rawTransactionSchema = z.object({
@@ -360,6 +394,7 @@ function mapCampaign(raw: z.infer<typeof rawCampaignSchema>): Campaign {
   return {
     id: raw.id,
     brandId: raw.brandId ?? raw.brand_id ?? "",
+    brandName: raw.brandName ?? raw.brand_name ?? null,
     title: raw.title,
     description: raw.description,
     niche: raw.niche ?? raw.category ?? "",
@@ -367,6 +402,7 @@ function mapCampaign(raw: z.infer<typeof rawCampaignSchema>): Campaign {
     deliverableType: raw.deliverableType ?? raw.deliverable_type ?? raw.deliverables?.[0]?.kind ?? "",
     budgetPaise: raw.budgetPaise ?? raw.budget_paise ?? perCreatorBudget * Math.max(maxCreators, 1),
     maxCreators,
+    applicantCount: raw.applicantCount ?? raw.applicant_count ?? 0,
     applicationDeadline: raw.applicationDeadline ?? raw.application_deadline ?? raw.apply_deadline ?? "",
     status: raw.status,
     briefUrl: briefUrlFromDeliverable(raw),
@@ -382,6 +418,27 @@ function parseCampaignDetail(data: unknown): Campaign {
   const wrapped = campaignDetailResponseSchema.safeParse(data);
   if (wrapped.success) return mapCampaign(wrapped.data.campaign);
   return mapCampaign(rawCampaignSchema.parse(data));
+}
+
+function parsePaginatedCampaigns(data: unknown): PaginatedCampaigns {
+  const raw = paginatedCampaignsResponseSchema.parse(data);
+  return {
+    campaigns: raw.campaigns.map(mapCampaign),
+    nextCursor: raw.nextCursor,
+  };
+}
+
+function parseCreatorApplications(data: unknown): CreatorApplication[] {
+  const raw = creatorApplicationsResponseSchema.parse(data);
+  return raw.applications.map((application) => ({
+    applicationId: application.applicationId,
+    campaignId: application.campaignId,
+    status: application.status,
+    appliedAt: application.appliedAt,
+    brandName: application.brandName ?? null,
+    deliverableStatus: application.deliverableStatus ?? null,
+    campaign: mapCampaign(application.campaign),
+  }));
 }
 
 function mapTransaction(raw: z.infer<typeof rawTransactionSchema>): EarningTransaction {
@@ -466,7 +523,7 @@ export function createApiClient(config: ApiClientConfig) {
 
   const get = (path: string) => requestJson(clientConfig, "GET", path);
   const post = (path: string, body?: unknown) => requestJson(clientConfig, "POST", path, body);
-  const patch = (path: string, body: unknown) => requestJson(clientConfig, "PATCH", path, body);
+  const patch = (path: string, body?: unknown) => requestJson(clientConfig, "PATCH", path, body);
 
   const brand = {
     async getProfile(): Promise<BrandProfile> {
@@ -516,32 +573,63 @@ export function createApiClient(config: ApiClientConfig) {
 
     creator: {
       async getProfile(): Promise<CreatorProfile> {
-        return parseCreatorProfile(await get("/api/profile"));
+        return parseCreatorProfile(await get("/api/creator/profile"));
       },
 
       async updateProfile(data: Partial<CreatorProfile>): Promise<CreatorProfile> {
         const body = toCreatorProfileBody(data);
-        return parseCreatorProfile(await patch("/api/profile", body));
+        return parseCreatorProfile(await patch("/api/creator/profile", body));
       },
 
-      async getCampaigns(status?: string): Promise<Campaign[]> {
-        return parseCampaignList(await get(withQuery("/api/campaigns", { status })));
+      async getHomeStats(): Promise<HomeStats> {
+        return homeStatsSchema.parse(await get("/api/creator/home-stats"));
+      },
+
+      async getCampaigns(status?: string, limit?: number): Promise<Campaign[]> {
+        return parseCampaignList(await get(withQuery("/api/creator/campaigns", {
+          status,
+          limit: limit === undefined ? undefined : String(limit),
+        })));
+      },
+
+      async discoverCampaigns(params: {
+        search?: string;
+        niche?: string;
+        cursor?: string;
+        limit?: number;
+      } = {}): Promise<PaginatedCampaigns> {
+        return parsePaginatedCampaigns(await get(withQuery("/api/creator/campaigns/discover", {
+          search: params.search,
+          niche: params.niche,
+          cursor: params.cursor,
+          limit: params.limit === undefined ? undefined : String(params.limit),
+        })));
       },
 
       async getCampaignDetail(id: string): Promise<Campaign> {
         return parseCampaignDetail(await get(`/api/campaigns/${encodeURIComponent(id)}`));
       },
 
-      async getEarnings(): Promise<EarningsSummary> {
-        return parseEarnings(await get("/api/earnings"));
+      async getMyApplications(status?: string): Promise<CreatorApplication[]> {
+        return parseCreatorApplications(await get(withQuery("/api/creator/my-campaigns", { status })));
       },
 
-      async getNotifications(): Promise<Notification[]> {
-        return parseNotifications(await get("/api/notifications"));
+      async getEarnings(): Promise<EarningsSummary> {
+        return parseEarnings(await get("/api/creator/earnings"));
+      },
+
+      async getNotifications(limit?: number): Promise<Notification[]> {
+        return parseNotifications(await get(withQuery("/api/creator/notifications", {
+          limit: limit === undefined ? undefined : String(limit),
+        })));
       },
 
       async markNotificationRead(id: string): Promise<void> {
-        await post(`/api/notifications/${encodeURIComponent(id)}/read`);
+        await patch(`/api/creator/notifications/${encodeURIComponent(id)}/read`);
+      },
+
+      async markAllNotificationsRead(): Promise<void> {
+        await patch("/api/creator/notifications/read-all");
       },
     },
 
