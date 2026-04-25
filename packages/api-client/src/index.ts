@@ -1,32 +1,42 @@
 import { z } from "zod";
 import {
   ApiError,
+  type Application,
   type AuthResponse,
   type BrandProfile,
   type Campaign,
+  type CampaignDetail,
   type CreatorApplication,
   type CreatorProfile,
   type DashboardStats,
+  type Deliverable,
   type EarningTransaction,
   type EarningsSummary,
   type HomeStats,
+  type Message,
   type Notification,
   type PaginatedCampaigns,
+  type Thread,
 } from "./types";
 
 export { ApiError } from "./types";
 export type {
+  Application,
   AuthResponse,
   BrandProfile,
   Campaign,
+  CampaignDetail,
   CreatorApplication,
   CreatorProfile,
   DashboardStats,
+  Deliverable,
   EarningTransaction,
   EarningsSummary,
   HomeStats,
+  Message,
   Notification,
   PaginatedCampaigns,
+  Thread,
 } from "./types";
 
 type HttpMethod = "GET" | "POST" | "PATCH";
@@ -189,6 +199,122 @@ const paginatedCampaignsResponseSchema = campaignListResponseSchema.extend({
 
 const campaignDetailResponseSchema = z.object({
   campaign: rawCampaignSchema,
+}).passthrough();
+
+const rawApplicationSchema = z.object({
+  id: z.string(),
+  campaign_id: z.string().optional(),
+  campaignId: z.string().optional(),
+  creator_id: z.string().optional(),
+  creatorId: z.string().optional(),
+  pitch: z.string().optional().default(""),
+  status: z.string(),
+  applied_at: z.string().optional(),
+  appliedAt: z.string().optional(),
+  decided_at: z.string().nullable().optional(),
+  decidedAt: z.string().nullable().optional(),
+  decided_by: z.string().nullable().optional(),
+  decidedBy: z.string().nullable().optional(),
+}).passthrough();
+
+const rawDeliverableSchema = z.object({
+  id: z.string(),
+  application_id: z.string().optional(),
+  applicationId: z.string().optional(),
+  campaign_id: z.string().optional(),
+  campaignId: z.string().optional(),
+  creator_id: z.string().optional(),
+  creatorId: z.string().optional(),
+  kind: z.string().optional(),
+  deliverableType: z.string().optional(),
+  asset_url: z.string().nullable().optional(),
+  contentUrl: z.string().nullable().optional(),
+  caption: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  status: z.string(),
+  submitted_at: z.string().nullable().optional(),
+  submittedAt: z.string().nullable().optional(),
+  decided_at: z.string().nullable().optional(),
+  decidedAt: z.string().nullable().optional(),
+  live_url: z.string().nullable().optional(),
+  liveUrl: z.string().nullable().optional(),
+}).passthrough();
+
+const rawThreadSchema = z.object({
+  id: z.string(),
+  campaign_id: z.string().nullable().optional(),
+  campaignId: z.string().nullable().optional(),
+  brand_id: z.string().optional(),
+  brandId: z.string().optional(),
+  creator_id: z.string().optional(),
+  creatorId: z.string().optional(),
+  created_at: z.string().optional(),
+  createdAt: z.string().optional(),
+  updated_at: z.string().optional(),
+  updatedAt: z.string().optional(),
+  last_message_preview: z.string().optional(),
+  lastMessagePreview: z.string().optional(),
+  last_message_at: z.string().optional(),
+  lastMessageAt: z.string().optional(),
+  unread_count: z.number().optional(),
+  unreadCount: z.number().optional(),
+  brand: z.object({
+    id: z.string(),
+    name: z.string(),
+    logo_url: z.string().nullable().optional(),
+    logoUrl: z.string().nullable().optional(),
+  }).nullable().optional(),
+  campaign: z.object({
+    id: z.string(),
+    title: z.string(),
+  }).nullable().optional(),
+}).passthrough();
+
+const rawMessageSchema = z.object({
+  id: z.string(),
+  thread_id: z.string().optional(),
+  threadId: z.string().optional(),
+  sender_id: z.string().optional(),
+  senderId: z.string().optional(),
+  sender_role: z.enum(["creator", "brand", "system"]).optional(),
+  senderRole: z.enum(["creator", "brand", "system"]).optional(),
+  body: z.string(),
+  read_at: z.string().nullable().optional(),
+  readAt: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+  createdAt: z.string().optional(),
+}).passthrough();
+
+const creatorCampaignDetailResponseSchema = z.object({
+  campaign: rawCampaignSchema,
+  brand: z.object({
+    id: z.string(),
+    name: z.string(),
+    logo_url: z.string().nullable().optional(),
+    logoUrl: z.string().nullable().optional(),
+  }).nullable().optional(),
+  application: rawApplicationSchema.nullable().optional(),
+}).passthrough();
+
+const applicationResponseSchema = z.object({
+  application: rawApplicationSchema,
+}).passthrough();
+
+const deliverableResponseSchema = z.object({
+  deliverable: rawDeliverableSchema,
+}).passthrough();
+
+const threadListResponseSchema = z.object({
+  threads: z.array(rawThreadSchema),
+}).passthrough();
+
+const threadMessagesResponseSchema = z.object({
+  thread: rawThreadSchema,
+  messages: z.array(rawMessageSchema),
+}).passthrough();
+
+const messageResponseSchema = z.object({
+  message: rawMessageSchema,
 }).passthrough();
 
 const homeStatsSchema = z.object({
@@ -420,6 +546,108 @@ function parseCampaignDetail(data: unknown): Campaign {
   return mapCampaign(rawCampaignSchema.parse(data));
 }
 
+function mapApplication(raw: z.infer<typeof rawApplicationSchema>): Application {
+  return {
+    id: raw.id,
+    campaignId: raw.campaignId ?? raw.campaign_id ?? "",
+    creatorId: raw.creatorId ?? raw.creator_id ?? "",
+    pitch: raw.pitch,
+    status: raw.status,
+    appliedAt: raw.appliedAt ?? raw.applied_at ?? "",
+    decidedAt: raw.decidedAt ?? raw.decided_at ?? null,
+    decidedBy: raw.decidedBy ?? raw.decided_by ?? null,
+  };
+}
+
+function mapDeliverable(raw: z.infer<typeof rawDeliverableSchema>): Deliverable {
+  return {
+    id: raw.id,
+    applicationId: raw.applicationId ?? raw.application_id ?? "",
+    campaignId: raw.campaignId ?? raw.campaign_id ?? "",
+    creatorId: raw.creatorId ?? raw.creator_id ?? "",
+    deliverableType: raw.deliverableType ?? raw.kind ?? "Deliverable",
+    contentUrl: raw.contentUrl ?? raw.asset_url ?? null,
+    notes: raw.notes ?? raw.caption ?? null,
+    status: raw.status,
+    submittedAt: raw.submittedAt ?? raw.submitted_at ?? null,
+    decidedAt: raw.decidedAt ?? raw.decided_at ?? null,
+    liveUrl: raw.liveUrl ?? raw.live_url ?? null,
+  };
+}
+
+function parseCreatorCampaignDetail(data: unknown): CampaignDetail {
+  const raw = creatorCampaignDetailResponseSchema.parse(data);
+  return {
+    campaign: mapCampaign(raw.campaign),
+    brand: raw.brand
+      ? {
+          id: raw.brand.id,
+          name: raw.brand.name,
+          logoUrl: raw.brand.logoUrl ?? raw.brand.logo_url ?? null,
+        }
+      : null,
+    application: raw.application ? mapApplication(raw.application) : null,
+  };
+}
+
+function parseApplication(data: unknown): Application {
+  return mapApplication(applicationResponseSchema.parse(data).application);
+}
+
+function parseDeliverable(data: unknown): Deliverable {
+  return mapDeliverable(deliverableResponseSchema.parse(data).deliverable);
+}
+
+function mapThread(raw: z.infer<typeof rawThreadSchema>): Thread {
+  return {
+    id: raw.id,
+    campaignId: raw.campaignId ?? raw.campaign_id ?? null,
+    brandId: raw.brandId ?? raw.brand_id ?? "",
+    creatorId: raw.creatorId ?? raw.creator_id ?? "",
+    createdAt: raw.createdAt ?? raw.created_at ?? "",
+    updatedAt: raw.updatedAt ?? raw.updated_at ?? "",
+    lastMessagePreview: raw.lastMessagePreview ?? raw.last_message_preview ?? "",
+    lastMessageAt: raw.lastMessageAt ?? raw.last_message_at ?? "",
+    unreadCount: raw.unreadCount ?? raw.unread_count ?? 0,
+    brand: raw.brand
+      ? {
+          id: raw.brand.id,
+          name: raw.brand.name,
+          logoUrl: raw.brand.logoUrl ?? raw.brand.logo_url ?? null,
+        }
+      : null,
+    campaign: raw.campaign ?? null,
+  };
+}
+
+function mapMessage(raw: z.infer<typeof rawMessageSchema>): Message {
+  return {
+    id: raw.id,
+    threadId: raw.threadId ?? raw.thread_id ?? "",
+    senderId: raw.senderId ?? raw.sender_id ?? "",
+    senderRole: raw.senderRole ?? raw.sender_role ?? "system",
+    body: raw.body,
+    readAt: raw.readAt ?? raw.read_at ?? null,
+    createdAt: raw.createdAt ?? raw.created_at ?? "",
+  };
+}
+
+function parseThreads(data: unknown): Thread[] {
+  return threadListResponseSchema.parse(data).threads.map(mapThread);
+}
+
+function parseThreadMessages(data: unknown): { thread: Thread; messages: Message[] } {
+  const raw = threadMessagesResponseSchema.parse(data);
+  return {
+    thread: mapThread(raw.thread),
+    messages: raw.messages.map(mapMessage),
+  };
+}
+
+function parseMessage(data: unknown): Message {
+  return mapMessage(messageResponseSchema.parse(data).message);
+}
+
 function parsePaginatedCampaigns(data: unknown): PaginatedCampaigns {
   const raw = paginatedCampaignsResponseSchema.parse(data);
   return {
@@ -606,12 +834,43 @@ export function createApiClient(config: ApiClientConfig) {
         })));
       },
 
-      async getCampaignDetail(id: string): Promise<Campaign> {
-        return parseCampaignDetail(await get(`/api/campaigns/${encodeURIComponent(id)}`));
+      async getCampaignDetail(id: string): Promise<CampaignDetail> {
+        return parseCreatorCampaignDetail(await get(`/api/creator/campaigns/${encodeURIComponent(id)}`));
+      },
+
+      async applyToCampaign(id: string, coverNote?: string): Promise<Application> {
+        return parseApplication(await post(`/api/creator/campaigns/${encodeURIComponent(id)}/apply`, {
+          coverNote,
+        }));
+      },
+
+      async submitDeliverable(
+        id: string,
+        data: { contentUrl: string; notes?: string },
+      ): Promise<Deliverable> {
+        return parseDeliverable(await post(`/api/creator/campaigns/${encodeURIComponent(id)}/deliverable`, data));
+      },
+
+      async respondToInvite(id: string, accept: boolean): Promise<Application> {
+        return parseApplication(await patch(`/api/creator/campaigns/${encodeURIComponent(id)}/invite-response`, {
+          accept,
+        }));
       },
 
       async getMyApplications(status?: string): Promise<CreatorApplication[]> {
         return parseCreatorApplications(await get(withQuery("/api/creator/my-campaigns", { status })));
+      },
+
+      async getThreads(): Promise<Thread[]> {
+        return parseThreads(await get("/api/creator/threads"));
+      },
+
+      async getThreadMessages(threadId: string): Promise<{ thread: Thread; messages: Message[] }> {
+        return parseThreadMessages(await get(`/api/creator/threads/${encodeURIComponent(threadId)}/messages`));
+      },
+
+      async sendMessage(threadId: string, body: string): Promise<Message> {
+        return parseMessage(await post(`/api/creator/threads/${encodeURIComponent(threadId)}/messages`, { body }));
       },
 
       async getEarnings(): Promise<EarningsSummary> {
@@ -634,5 +893,9 @@ export function createApiClient(config: ApiClientConfig) {
     },
 
     brand,
+
+    async registerPushToken(token: string, platform: "ios" | "android" | "web"): Promise<void> {
+      await post("/api/push-tokens", { token, platform });
+    },
   };
 }

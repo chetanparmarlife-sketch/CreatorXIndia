@@ -17,6 +17,8 @@ import {
   getAllCampaigns, adminUpdateCampaignStatus, getAllApplications, adminUpdateApplicationStatus,
   getAllDeliverables, adminUpdateDeliverableStatus, getAdminDashboardStats, getAuditLog,
   getCreatorHomeStats, discoverCampaigns, getCreatorApplications,
+  getCreatorCampaignDetail, applyToCampaign, submitDeliverable, respondToInvite,
+  getCreatorThreads, getCreatorThreadMessages, createCreatorMessage,
   markNotificationRead, markAllNotificationsRead,
 } from "./storage";
 import {
@@ -194,6 +196,19 @@ const adminDeliverableStatusSchema = z
       });
     }
   });
+const creatorCampaignApplySchema = z.object({
+  coverNote: z.string().trim().max(500, "coverNote must be at most 500 characters").optional(),
+}).strict();
+const creatorDeliverableSubmitSchema = z.object({
+  contentUrl: z.string().trim().url("contentUrl must be a valid URL"),
+  notes: z.string().trim().optional(),
+}).strict();
+const creatorInviteResponseSchema = z.object({
+  accept: z.boolean(),
+}).strict();
+const creatorThreadMessageSchema = z.object({
+  body: z.string().trim().min(1, "body is required").max(2000, "body must be at most 2000 characters"),
+}).strict();
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
   if (!status) return undefined;
@@ -506,6 +521,87 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ applications: await getCreatorApplications(uid, parsedStatus?.data) });
   });
 
+  app.get("/api/creator/campaigns/:id", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const detail = await getCreatorCampaignDetail(routeParam(req, "id"), uid);
+    if (!detail) return res.status(404).json({ error: "Campaign not found" });
+    return res.json(detail);
+  });
+
+  app.post("/api/creator/campaigns/:id/apply", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorCampaignApplySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const application = await applyToCampaign(routeParam(req, "id"), uid, parsed.data.coverNote);
+      return res.json({ application });
+    } catch (error) {
+      if (error instanceof Error && error.message === "DUPLICATE_APPLICATION") {
+        return res.status(409).json({ error: "Already applied or invited" });
+      }
+      if (error instanceof Error && error.message === "CAMPAIGN_NOT_FOUND") {
+        return res.status(404).json({ error: "Campaign not found" });
+      }
+      if (error instanceof Error && error.message === "CAMPAIGN_NOT_OPEN") {
+        return res.status(400).json({ error: "Campaign is not open for applications" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/creator/campaigns/:id/deliverable", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorDeliverableSubmitSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const deliverable = await submitDeliverable(
+        routeParam(req, "id"),
+        uid,
+        parsed.data.contentUrl,
+        parsed.data.notes,
+      );
+      return res.json({ deliverable });
+    } catch (error) {
+      if (error instanceof Error && error.message === "APPLICATION_NOT_FOUND") {
+        return res.status(404).json({ error: "Application not found" });
+      }
+      if (error instanceof Error && error.message === "APPLICATION_NOT_APPROVED") {
+        return res.status(400).json({ error: "Application must be approved before submitting deliverables" });
+      }
+      if (error instanceof Error && error.message === "CAMPAIGN_NOT_FOUND") {
+        return res.status(404).json({ error: "Campaign not found" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.patch("/api/creator/campaigns/:id/invite-response", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorInviteResponseSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const detail = await getCreatorCampaignDetail(routeParam(req, "id"), uid);
+      if (!detail?.application) return res.status(404).json({ error: "Invite not found" });
+      const application = await respondToInvite(detail.application.id, uid, parsed.data.accept);
+      if (!application) return res.status(404).json({ error: "Invite not found" });
+      return res.json({ application });
+    } catch (error) {
+      if (error instanceof Error && error.message === "INVITE_NOT_FOUND") {
+        return res.status(400).json({ error: "Campaign invite is not pending" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
   app.get("/api/creator/earnings", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
     const me = await profiles.byId(uid);
@@ -539,6 +635,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const didUpdate = await markNotificationRead(routeParam(req, "id"), uid);
     if (!didUpdate) return res.status(404).json({ error: "Notification not found" });
     return res.json({ ok: true });
+  });
+
+  app.get("/api/creator/threads", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    return res.json({ threads: await getCreatorThreads(uid) });
+  });
+
+  app.get("/api/creator/threads/:threadId/messages", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    try {
+      const result = await getCreatorThreadMessages(routeParam(req, "threadId"), uid);
+      if (!result) return res.status(404).json({ error: "Thread not found" });
+      return res.json(result);
+    } catch (error) {
+      if (error instanceof Error && error.message === "FORBIDDEN") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/creator/threads/:threadId/messages", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorThreadMessageSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const message = await createCreatorMessage(routeParam(req, "threadId"), uid, parsed.data.body);
+      if (!message) return res.status(404).json({ error: "Thread not found" });
+      return res.json({ message });
+    } catch (error) {
+      if (error instanceof Error && error.message === "FORBIDDEN") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
   });
 
   // ------------------------------------------------------------------

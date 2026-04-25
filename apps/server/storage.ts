@@ -171,6 +171,42 @@ export interface CreatorApplicationSummary {
   campaign: DiscoverCampaign;
 }
 
+export interface CreatorCampaignDetail {
+  campaign: DiscoverCampaign;
+  brand: {
+    id: string;
+    name: string;
+    logo_url: string | null;
+  } | null;
+  application: Application | null;
+}
+
+export interface CreatorThreadSummary {
+  id: string;
+  campaign_id: string | null;
+  brand_id: string;
+  creator_id: string;
+  created_at: string;
+  updated_at: string;
+  last_message_preview: string;
+  last_message_at: string;
+  unread_count: number;
+  brand: {
+    id: string;
+    name: string;
+    logo_url: string | null;
+  } | null;
+  campaign: {
+    id: string;
+    title: string;
+  } | null;
+}
+
+export interface CreatorThreadMessages {
+  thread: CreatorThreadSummary;
+  messages: Message[];
+}
+
 export interface IStorage {
   upsertPushToken(userId: string, token: string, platform: PushPlatform): Promise<void>;
   getCreatorHomeStats(creatorId: string): Promise<CreatorHomeStats>;
@@ -183,6 +219,13 @@ export interface IStorage {
     creatorId: string,
     status?: CreatorApplicationFilterStatus,
   ): Promise<CreatorApplicationSummary[]>;
+  getCreatorCampaignDetail(campaignId: string, creatorId: string): Promise<CreatorCampaignDetail | null>;
+  applyToCampaign(campaignId: string, creatorId: string, coverNote?: string): Promise<Application>;
+  submitDeliverable(campaignId: string, creatorId: string, contentUrl: string, notes?: string): Promise<Deliverable>;
+  respondToInvite(applicationId: string, creatorId: string, accept: boolean): Promise<Application | null>;
+  getCreatorThreads(creatorId: string): Promise<CreatorThreadSummary[]>;
+  getCreatorThreadMessages(threadId: string, creatorId: string): Promise<CreatorThreadMessages | null>;
+  createCreatorMessage(threadId: string, creatorId: string, body: string): Promise<Message | null>;
   markNotificationRead(notificationId: string, creatorId: string): Promise<boolean>;
   markAllNotificationsRead(creatorId: string): Promise<void>;
   getBrandProfile(userId: string): Promise<Brand>;
@@ -2053,6 +2096,296 @@ export async function getCreatorApplications(
   }
 
   return summaries.sort((a, b) => (a.appliedAt < b.appliedAt ? 1 : -1));
+}
+
+export async function getCreatorCampaignDetail(
+  campaignId: string,
+  creatorId: string,
+): Promise<CreatorCampaignDetail | null> {
+  await ensureSeeded();
+
+  const [campaign, brandRows, applicationRows] = await Promise.all([
+    campaigns.byId(campaignId),
+    db.select().from(brandsTable),
+    db
+      .select()
+      .from(applicationsTable)
+      .where(and(eq(applicationsTable.campaign_id, campaignId), eq(applicationsTable.creator_id, creatorId))),
+  ]);
+
+  if (!campaign) return null;
+
+  const brandById = new Map(brandRows.map((brand) => [brand.id, brand]));
+  const applicantRows = await db.select({ campaign_id: applicationsTable.campaign_id }).from(applicationsTable);
+  const applicantCounts = new Map<string, number>();
+  for (const application of applicantRows) {
+    applicantCounts.set(application.campaign_id, (applicantCounts.get(application.campaign_id) ?? 0) + 1);
+  }
+
+  const brand = brandById.get(campaign.brand_id) ?? null;
+  return {
+    campaign: withCreatorCampaignFields(campaign, brandById, applicantCounts),
+    brand: brand
+      ? {
+          id: brand.id,
+          name: brand.name,
+          logo_url: brand.logo_url,
+        }
+      : null,
+    application: applicationRows[0] ?? null,
+  };
+}
+
+export async function applyToCampaign(
+  campaignId: string,
+  creatorId: string,
+  coverNote?: string,
+): Promise<Application> {
+  await ensureSeeded();
+
+  const campaign = await campaigns.byId(campaignId);
+  if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+  if (!campaignIsActiveForCreator(campaign)) throw new Error("CAMPAIGN_NOT_OPEN");
+
+  const [existing] = await db
+    .select()
+    .from(applicationsTable)
+    .where(and(eq(applicationsTable.campaign_id, campaignId), eq(applicationsTable.creator_id, creatorId)))
+    .limit(1);
+  if (existing) throw new Error("DUPLICATE_APPLICATION");
+
+  const row: Application = {
+    id: newId(),
+    campaign_id: campaignId,
+    creator_id: creatorId,
+    pitch: coverNote?.trim() ?? "",
+    status: "pending",
+    applied_at: now(),
+    decided_at: null,
+    decided_by: null,
+  };
+
+  await db.insert(applicationsTable).values(row);
+  await writeAudit(creatorId, "creator_apply_campaign", "application", row.id, {
+    campaign_id: campaignId,
+    coverNote,
+  });
+  return row;
+}
+
+export async function submitDeliverable(
+  campaignId: string,
+  creatorId: string,
+  contentUrl: string,
+  notes?: string,
+): Promise<Deliverable> {
+  await ensureSeeded();
+
+  const [application] = await db
+    .select()
+    .from(applicationsTable)
+    .where(and(eq(applicationsTable.campaign_id, campaignId), eq(applicationsTable.creator_id, creatorId)))
+    .limit(1);
+  if (!application) throw new Error("APPLICATION_NOT_FOUND");
+  if (application.status !== "accepted") throw new Error("APPLICATION_NOT_APPROVED");
+
+  const campaign = await campaigns.byId(campaignId);
+  if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+
+  const row: Deliverable = {
+    id: newId(),
+    application_id: application.id,
+    campaign_id: campaignId,
+    creator_id: creatorId,
+    kind: campaign.deliverables[0]?.kind ?? "Deliverable",
+    asset_url: contentUrl.trim(),
+    caption: notes?.trim() || null,
+    status: "pending",
+    feedback: null,
+    submitted_at: now(),
+    decided_at: null,
+    live_url: null,
+    live_at: null,
+  };
+
+  await db.insert(deliverablesTable).values(row);
+  await writeAudit(creatorId, "creator_submit_deliverable", "deliverable", row.id, {
+    campaign_id: campaignId,
+    contentUrl,
+    notes,
+  });
+  return row;
+}
+
+export async function respondToInvite(
+  applicationId: string,
+  creatorId: string,
+  accept: boolean,
+): Promise<Application | null> {
+  await ensureSeeded();
+
+  const [current] = await db
+    .select()
+    .from(applicationsTable)
+    .where(and(eq(applicationsTable.id, applicationId), eq(applicationsTable.creator_id, creatorId)))
+    .limit(1);
+  if (!current) return null;
+  if (current.status !== "invited") throw new Error("INVITE_NOT_FOUND");
+
+  const nextStatus: Application["status"] = accept ? "pending" : "rejected";
+  const [updated] = await db
+    .update(applicationsTable)
+    .set({
+      status: nextStatus,
+      decided_at: accept ? null : now(),
+      decided_by: accept ? null : creatorId,
+    })
+    .where(eq(applicationsTable.id, applicationId))
+    .returning();
+
+  if (!updated) return null;
+  await writeAudit(creatorId, accept ? "creator_accept_invite" : "creator_decline_invite", "application", applicationId, {
+    campaign_id: current.campaign_id,
+    accept,
+  });
+  return updated;
+}
+
+async function creatorThreadSummary(thread: MessageThread): Promise<CreatorThreadSummary> {
+  const [brand, campaign, unreadForCreator] = await Promise.all([
+    brands.byId(thread.brand_id),
+    thread.campaign_id ? campaigns.byId(thread.campaign_id) : Promise.resolve(null),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messagesTable)
+      .where(
+        and(
+          eq(messagesTable.thread_id, thread.id),
+          eq(messagesTable.sender_role, "brand"),
+          isNull(messagesTable.read_at),
+        ),
+      ),
+  ]);
+
+  return {
+    id: thread.id,
+    campaign_id: thread.campaign_id,
+    brand_id: thread.brand_id,
+    creator_id: thread.creator_id,
+    created_at: thread.created_at || thread.last_message_at,
+    updated_at: thread.updated_at || thread.last_message_at,
+    last_message_preview: thread.last_message_preview,
+    last_message_at: thread.last_message_at,
+    unread_count: unreadForCreator[0]?.count ?? 0,
+    brand: brand
+      ? {
+          id: brand.id,
+          name: brand.name,
+          logo_url: brand.logo_url,
+        }
+      : null,
+    campaign: campaign
+      ? {
+          id: campaign.id,
+          title: campaign.title,
+        }
+      : null,
+  };
+}
+
+export async function getCreatorThreads(creatorId: string): Promise<CreatorThreadSummary[]> {
+  await ensureSeeded();
+
+  const rows = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(eq(messageThreadsTable.creator_id, creatorId));
+
+  const sorted = rows.sort((a, b) => {
+    const aTime = a.updated_at || a.last_message_at;
+    const bTime = b.updated_at || b.last_message_at;
+    return aTime < bTime ? 1 : -1;
+  });
+
+  return Promise.all(sorted.map((thread) => creatorThreadSummary(thread)));
+}
+
+export async function getCreatorThreadMessages(
+  threadId: string,
+  creatorId: string,
+): Promise<CreatorThreadMessages | null> {
+  await ensureSeeded();
+
+  const [thread] = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(eq(messageThreadsTable.id, threadId))
+    .limit(1);
+  if (!thread) return null;
+  if (thread.creator_id !== creatorId) throw new Error("FORBIDDEN");
+
+  const readAt = now();
+  await db
+    .update(messagesTable)
+    .set({ read_at: readAt, read: true })
+    .where(
+      and(
+        eq(messagesTable.thread_id, threadId),
+        eq(messagesTable.sender_role, "brand"),
+        isNull(messagesTable.read_at),
+      ),
+    );
+
+  const messageRows = await db.select().from(messagesTable).where(eq(messagesTable.thread_id, threadId));
+  return {
+    thread: await creatorThreadSummary(thread),
+    messages: sortAscBy(messageRows),
+  };
+}
+
+export async function createCreatorMessage(
+  threadId: string,
+  creatorId: string,
+  body: string,
+): Promise<Message | null> {
+  await ensureSeeded();
+
+  const [thread] = await db
+    .select()
+    .from(messageThreadsTable)
+    .where(eq(messageThreadsTable.id, threadId))
+    .limit(1);
+  if (!thread) return null;
+  if (thread.creator_id !== creatorId) throw new Error("FORBIDDEN");
+
+  const createdAt = now();
+  const msg: Message = {
+    id: newId(),
+    thread_id: threadId,
+    sender_id: creatorId,
+    sender_role: "creator",
+    body,
+    attachment_url: null,
+    attachment_kind: null,
+    attachment_name: null,
+    attachment_size: null,
+    read: false,
+    read_at: null,
+    created_at: createdAt,
+  };
+
+  await db.insert(messagesTable).values(msg);
+  await db
+    .update(messageThreadsTable)
+    .set({
+      last_message_preview: body.slice(0, 120),
+      last_message_at: createdAt,
+      updated_at: createdAt,
+    })
+    .where(eq(messageThreadsTable.id, threadId));
+
+  await writeAudit(creatorId, "creator_send_message", "message", msg.id, { thread_id: threadId });
+  return msg;
 }
 
 export async function markNotificationRead(notificationId: string, creatorId: string): Promise<boolean> {

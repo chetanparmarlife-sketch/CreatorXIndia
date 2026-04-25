@@ -72,6 +72,72 @@ export interface CreatorApplication {
   campaign: Campaign;
 }
 
+export interface Application {
+  id: string;
+  campaignId: string;
+  creatorId: string;
+  pitch: string;
+  status: string;
+  appliedAt: string;
+  decidedAt: string | null;
+  decidedBy: string | null;
+}
+
+export interface Deliverable {
+  id: string;
+  applicationId: string;
+  campaignId: string;
+  creatorId: string;
+  deliverableType: string;
+  contentUrl: string | null;
+  notes: string | null;
+  status: string;
+  submittedAt: string | null;
+  decidedAt: string | null;
+  liveUrl: string | null;
+}
+
+export interface CampaignDetail {
+  campaign: Campaign;
+  brand: {
+    id: string;
+    name: string;
+    logoUrl: string | null;
+  } | null;
+  application: Application | null;
+}
+
+export interface Thread {
+  id: string;
+  campaignId: string | null;
+  brandId: string;
+  creatorId: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessagePreview: string;
+  lastMessageAt: string;
+  unreadCount: number;
+  brand: {
+    id: string;
+    name: string;
+    logoUrl: string | null;
+  } | null;
+  campaign: {
+    id: string;
+    title: string;
+  } | null;
+}
+
+export interface Message {
+  id: string;
+  threadId: string;
+  senderId: string;
+  senderRole: "creator" | "brand" | "system";
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+}
+
 export interface EarningsSummary {
   totalEarnedPaise: number;
   pendingPaise: number;
