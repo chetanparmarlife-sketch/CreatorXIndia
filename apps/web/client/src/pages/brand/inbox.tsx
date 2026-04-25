@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { timeAgo } from "@/lib/format";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type BrandThreadRow = {
   id: string;
@@ -32,8 +33,10 @@ function truncatePreview(input: string): string {
 
 export default function BrandInboxPage() {
   const [, navigate] = useLocation();
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
   const { data, isLoading } = useQuery<{ threads: BrandThreadRow[] }>({
-    queryKey: ["brand", "threads"],
+    queryKey: ["brand", brandId, "threads"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/threads");
       return res.json() as Promise<{ threads: BrandThreadRow[] }>;
@@ -67,7 +70,7 @@ export default function BrandInboxPage() {
             <button
               key={thread.id}
               type="button"
-              onClick={() => navigate(`/brand/messages/${thread.id}`)}
+              onClick={() => navigate(`${brandBasePath}/messages/${thread.id}`)}
               className="w-full rounded-2xl border border-border bg-card p-4 text-left hover:bg-muted/40"
               data-testid={`thread-row-${thread.id}`}
             >

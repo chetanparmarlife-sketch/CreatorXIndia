@@ -11,6 +11,10 @@ type AuthBridge = {
   logout: () => Promise<void> | void;
 };
 
+type ActingBrandBridge = {
+  getActingBrandId: () => string | null;
+};
+
 let authBridge: AuthBridge = {
   getAccessToken: () => null,
   getUserId: () => null,
@@ -18,17 +22,36 @@ let authBridge: AuthBridge = {
   logout: () => {},
 };
 
+export function getActingBrandIdFromLocation(): string | null {
+  if (typeof window === "undefined") return null;
+  const rawPath = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.pathname;
+  const match = rawPath.match(/^\/admin\/brands\/([^/]+)(?:\/|$)/);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+let actingBrandBridge: ActingBrandBridge = {
+  getActingBrandId: getActingBrandIdFromLocation,
+};
+
 export function setAuthBridge(next: Partial<AuthBridge>) {
   authBridge = { ...authBridge, ...next };
+}
+
+export function setActingBrandBridge(next: Partial<ActingBrandBridge>) {
+  actingBrandBridge = { ...actingBrandBridge, ...next };
 }
 
 function authHeaders(accessTokenOverride?: string | null): Record<string, string> {
   const token = accessTokenOverride ?? authBridge.getAccessToken();
   const userId = authBridge.getUserId();
+  const actingBrandId = actingBrandBridge.getActingBrandId();
 
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   if (userId) headers["X-User-Id"] = userId;
+  if (actingBrandId) headers["X-Acting-As-Brand"] = actingBrandId;
   return headers;
 }
 

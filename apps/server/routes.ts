@@ -14,6 +14,7 @@ import {
   getCreatorProfile, getCreatorStats, getCreatorPortfolio, inviteCreatorToCampaign,
   getBrandThreads, getThreadMessages, createMessage, createOrGetThread,
   getBrandTeam, inviteTeamMember, removeTeamMember, updateNotificationPreferences,
+  getAllBrands, updateBrandStatus,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -39,6 +40,7 @@ import {
   verifyRefreshToken,
 } from "./auth";
 import { requireAuth, requireRole } from "./middleware/auth";
+import { impersonate } from "./middleware/impersonate";
 import { getPublicUrl, getUploadUrl } from "./lib/r2";
 import { createOrder, verifyWebhookSignature } from "./lib/razorpay";
 import { calculateGst, generateInvoiceNumber } from "./lib/invoice";
@@ -139,6 +141,10 @@ const brandTeamInviteSchema = z.object({
 const brandNotificationPreferencesSchema = z.object({
   preferences: z.record(z.boolean()),
 });
+const adminBrandStatusSchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+  reason: z.string().trim().optional(),
+});
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
   if (!status) return undefined;
@@ -219,7 +225,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       next();
       return;
     }
-    requireAuth(req, res, () => requireRole("brand")(req, res, next));
+    requireAuth(req, res, () => impersonate(req, res, () => requireRole("brand")(req, res, next)));
   });
 
   // ------------------------------------------------------------------
@@ -828,7 +834,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Brands -----------------------------------------------------------
   app.get("/api/admin/brands", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
-    res.json({ brands: await brands.list() });
+    res.json({ brands: await getAllBrands() });
+  });
+
+  app.patch("/api/admin/brands/:brandId/status", requireRole("admin_ops", "admin_support"), async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const parsed = adminBrandStatusSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const brandId = typeof req.params.brandId === "string" ? req.params.brandId : "";
+    const brand = await updateBrandStatus(brandId, parsed.data.status, parsed.data.reason, uid);
+    if (!brand) return res.status(404).json({ error: "Brand not found" });
+    return res.json({ brand });
   });
 
   app.post("/api/admin/brands", async (req, res) => {

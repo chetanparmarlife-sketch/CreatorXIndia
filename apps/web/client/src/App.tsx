@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider } from "@/lib/auth";
 import { RequireAuth, RequireRole, RoleRedirect } from "@/components/route-guard";
+import { AdminShell } from "@/components/admin-shell";
 import NotFound from "@/pages/not-found";
 
 // Auth pages
@@ -102,6 +103,14 @@ function AdminRoute({ children }: { children: ReactNode }) {
     <RequireAuth>
       <RequireRole roles={ADMIN_ROLES}>{children}</RequireRole>
     </RequireAuth>
+  );
+}
+
+function AdminBrandRoute({ children }: { children: ReactNode }) {
+  return (
+    <AdminRoute>
+      <AdminShell>{children}</AdminShell>
+    </AdminRoute>
   );
 }
 
@@ -237,6 +246,40 @@ function AppRouter() {
       </Route>
       <Route path="/brand">
         <Redirect to="/brand/dashboard" />
+      </Route>
+
+      <Route path="/admin/brands/:brandId/dashboard">
+        <AdminBrandRoute><BrandDashboardPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/campaigns/new">
+        <AdminBrandRoute><NewCampaignPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/campaigns/:id/applications">
+        <AdminBrandRoute><CampaignApplicationsPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/campaigns/:id/deliverables">
+        <AdminBrandRoute><CampaignDeliverablesPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/campaigns/:id">
+        <AdminBrandRoute><CampaignDetailPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/campaigns">
+        <AdminBrandRoute><CampaignListPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/wallet">
+        <AdminBrandRoute><WalletPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/inbox">
+        <AdminBrandRoute><BrandInboxPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/messages/:threadId">
+        <AdminBrandRoute><BrandThreadPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/team">
+        <AdminBrandRoute><BrandTeamPage /></AdminBrandRoute>
+      </Route>
+      <Route path="/admin/brands/:brandId/settings">
+        <AdminBrandRoute><BrandSettingsPage /></AdminBrandRoute>
       </Route>
 
       <Route path="/admin/dashboard">

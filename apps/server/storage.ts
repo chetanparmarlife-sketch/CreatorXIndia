@@ -53,6 +53,7 @@ import {
   withdrawals as withdrawalsTable,
 } from "@creatorx/schema";
 import { seed } from "./seed";
+import { getAuditContext } from "./middleware/impersonate";
 
 const newId = () => nanoid(12);
 const now = () => new Date().toISOString();
@@ -108,14 +109,16 @@ async function writeAudit(
   diff?: unknown,
 ): Promise<AuditLog> {
   const created_at = now();
-  const actorId = actorUserId ?? "system";
+  const context = getAuditContext();
+  const actorId = context.actorUserId ?? actorUserId ?? "system";
   const diff_json = toDiffJson(diff);
   const details = diff_json ? JSON.stringify(diff_json) : null;
 
   const row = {
     id: newId(),
-    actor_user_id: actorId ?? "system",
-    admin_id: actorId ?? "system",
+    actor_user_id: actorId,
+    acting_as_brand_id: context.actingAsBrandId,
+    admin_id: actorId,
     action,
     target_type: targetType,
     target_id: targetId,
@@ -388,6 +391,8 @@ export interface IStorage {
     brandId: string,
     preferences: Record<string, boolean>,
   ): Promise<Record<string, boolean>>;
+  getAllBrands(): Promise<Brand[]>;
+  updateBrandStatus(brandId: string, status: "approved" | "rejected", reason?: string, actorUserId?: string): Promise<Brand | null>;
 }
 
 export async function resetDb(): Promise<void> {
@@ -444,6 +449,7 @@ export async function getBrandProfile(userId: string): Promise<Brand> {
     name: profile?.full_name ? `${profile.full_name} Brand` : "My Brand",
     logo_url: null,
     verified: false,
+    status: "pending",
     website: null,
     industry: "",
     description: null,
@@ -2170,9 +2176,16 @@ export const brands = {
     return row ?? null;
   },
 
-  async create(data: Omit<Brand, "id" | "created_at" | "wallet_balance_paise" | "notification_preferences">): Promise<Brand> {
+  async create(data: Omit<Brand, "id" | "created_at" | "wallet_balance_paise" | "notification_preferences" | "status"> & Partial<Pick<Brand, "status">>): Promise<Brand> {
     await ensureSeeded();
-    const row: Brand = { ...data, id: newId(), wallet_balance_paise: 0, notification_preferences: {}, created_at: now() };
+    const row: Brand = {
+      ...data,
+      id: newId(),
+      status: data.status ?? "pending",
+      wallet_balance_paise: 0,
+      notification_preferences: {},
+      created_at: now(),
+    };
     await db.insert(brandsTable).values(row);
     await writeAudit("system", "create_brand", "brand", row.id, row);
     return row;
@@ -2192,6 +2205,31 @@ export const brands = {
     await writeAudit("system", "delete_brand", "brand", id, { removed: true });
   },
 };
+
+export async function getAllBrands(): Promise<Brand[]> {
+  return brands.list();
+}
+
+export async function updateBrandStatus(
+  brandId: string,
+  status: "approved" | "rejected",
+  reason?: string,
+  actorUserId = "system",
+): Promise<Brand | null> {
+  await ensureSeeded();
+  const [row] = await db
+    .update(brandsTable)
+    .set({
+      status,
+      verified: status === "approved",
+    })
+    .where(eq(brandsTable.id, brandId))
+    .returning();
+
+  if (!row) return null;
+  await writeAudit(actorUserId, "update_brand_status", "brand", brandId, { status, reason });
+  return row;
+}
 
 export const campaigns = {
   async list(filters?: { category?: string; status?: Campaign["status"]; featured?: boolean }): Promise<Campaign[]> {

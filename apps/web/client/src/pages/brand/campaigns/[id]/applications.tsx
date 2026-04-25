@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type ApplicationFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -56,12 +57,16 @@ function statusClass(status: "pending" | "approved" | "rejected"): string {
 }
 
 export default function CampaignApplicationsPage() {
-  const [matched, params] = useRoute<{ id: string }>("/brand/campaigns/:id/applications");
-  const campaignId = params?.id ?? "";
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
+  const [brandMatched, brandParams] = useRoute<{ id: string }>("/brand/campaigns/:id/applications");
+  const [adminMatched, adminParams] = useRoute<{ brandId: string; id: string }>("/admin/brands/:brandId/campaigns/:id/applications");
+  const matched = brandMatched || adminMatched;
+  const campaignId = brandParams?.id ?? adminParams?.id ?? "";
   const [activeFilter, setActiveFilter] = useState<ApplicationFilter>("all");
 
   const { data, isLoading } = useQuery<CampaignApplicationsResponse>({
-    queryKey: ["brand", "campaigns", campaignId, "applications", activeFilter],
+    queryKey: ["brand", brandId, "campaigns", campaignId, "applications", activeFilter],
     enabled: matched && campaignId.length > 0,
     queryFn: async () => {
       const path =
@@ -82,9 +87,9 @@ export default function CampaignApplicationsPage() {
     },
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId, "applications"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId, "stats"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId, "applications"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId, "stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId] }),
       ]);
     },
   });
@@ -98,7 +103,7 @@ export default function CampaignApplicationsPage() {
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <Link
-          href={`/brand/campaigns/${campaignId}`}
+          href={`${brandBasePath}/campaigns/${campaignId}`}
           className="inline-flex items-center text-sm font-medium text-primary underline"
           data-testid="link-back-to-campaign"
         >

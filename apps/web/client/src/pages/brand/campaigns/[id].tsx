@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtCompact, fmtMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type ApplicantPreview = {
   applicationId: string;
@@ -60,13 +61,17 @@ function statusBadgeClass(status: ReturnType<typeof toUiStatus>): string {
 
 export default function CampaignDetailPage() {
   const [, navigate] = useLocation();
-  const [matched, params] = useRoute<{ id: string }>("/brand/campaigns/:id");
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
+  const [brandMatched, brandParams] = useRoute<{ id: string }>("/brand/campaigns/:id");
+  const [adminMatched, adminParams] = useRoute<{ brandId: string; id: string }>("/admin/brands/:brandId/campaigns/:id");
   const { toast } = useToast();
 
-  const campaignId = params?.id ?? "";
+  const matched = brandMatched || adminMatched;
+  const campaignId = brandParams?.id ?? adminParams?.id ?? "";
 
   const { data: campaignData, isLoading } = useQuery<CampaignDetailResponse>({
-    queryKey: ["brand", "campaigns", campaignId],
+    queryKey: ["brand", brandId, "campaigns", campaignId],
     enabled: matched && campaignId.length > 0,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/brand/campaigns/${campaignId}`);
@@ -75,7 +80,7 @@ export default function CampaignDetailPage() {
   });
 
   const { data: statsData } = useQuery<CampaignStatsResponse>({
-    queryKey: ["brand", "campaigns", campaignId, "stats"],
+    queryKey: ["brand", brandId, "campaigns", campaignId, "stats"],
     enabled: matched && campaignId.length > 0,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/brand/campaigns/${campaignId}/stats`);
@@ -90,9 +95,9 @@ export default function CampaignDetailPage() {
     },
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId, "stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId, "stats"] }),
       ]);
     },
     onError: (error) => {
@@ -167,7 +172,7 @@ export default function CampaignDetailPage() {
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => navigate("/brand/campaigns")}
+                onClick={() => navigate(`${brandBasePath}/campaigns`)}
                 data-testid="btn-back-campaigns"
               >
                 Back to campaigns
@@ -219,7 +224,7 @@ export default function CampaignDetailPage() {
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-xl font-semibold">Applicants</h2>
             <Link
-              href={`/brand/campaigns/${campaign.id}/applications`}
+              href={`${brandBasePath}/campaigns/${campaign.id}/applications`}
               className="text-sm font-medium text-primary underline"
               data-testid="link-view-all-applicants"
             >

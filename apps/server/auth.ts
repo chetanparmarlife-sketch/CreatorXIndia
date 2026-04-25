@@ -102,6 +102,7 @@ async function logAuthEvent(
   await db.insert(audit_log).values({
     id: randomUUID(),
     actor_user_id: actorUserId,
+    acting_as_brand_id: null,
     admin_id: actorUserId,
     action,
     target_type: "auth",

@@ -69,6 +69,7 @@ export type PushPlatform = "ios" | "android" | "web";
 export type WalletTransactionType = "credit" | "debit";
 export type WalletTransactionStatus = "pending" | "completed" | "failed";
 export type BrandTeamRole = "admin" | "member" | "viewer";
+export type BrandStatus = "pending" | "approved" | "rejected";
 
 // Indian influencer tiers (by follower count)
 export type CreatorTier = "nano" | "micro" | "mid" | "macro" | "mega";
@@ -180,6 +181,7 @@ export interface Brand {
   name: string;
   logo_url: string | null;
   verified: boolean;
+  status: BrandStatus;
   website: string | null;
   industry: string;
   description: string | null;
@@ -366,6 +368,7 @@ export interface AuditLog {
   id: string;
   admin_id: string;
   actor_user_id?: string;
+  acting_as_brand_id?: string | null;
   action: string;                // "approve_withdrawal" | "verify_creator" | ...
   target_type?: string;
   target_id?: string;
@@ -447,6 +450,7 @@ export const pushPlatformEnum = pgEnum("push_platform", ["ios", "android", "web"
 export const walletTransactionTypeEnum = pgEnum("wallet_transaction_type", ["credit", "debit"]);
 export const walletTransactionStatusEnum = pgEnum("wallet_transaction_status", ["pending", "completed", "failed"]);
 export const brandTeamRoleEnum = pgEnum("brand_team_role", ["admin", "member", "viewer"]);
+export const brandStatusEnum = pgEnum("brand_status", ["pending", "approved", "rejected"]);
 export const creatorTierEnum = pgEnum("creator_tier", ["nano", "micro", "mid", "macro", "mega"]);
 export const kycStatusEnum = pgEnum("kyc_status", ["none", "pending", "verified", "rejected"]);
 export const eventKindEnum = pgEnum("event_kind", ["event", "perk", "news"]);
@@ -520,6 +524,7 @@ export const brands = pgTable("brands", {
   name: text("name").notNull(),
   logo_url: text("logo_url"),
   verified: boolean("verified").notNull().default(false),
+  status: brandStatusEnum("status").notNull().default("pending"),
   website: text("website"),
   industry: text("industry").notNull(),
   description: text("description"),
@@ -722,6 +727,7 @@ export const notifications = pgTable("notifications", {
 export const audit_log = pgTable("audit_log", {
   id: text("id").primaryKey(),
   actor_user_id: text("actor_user_id").notNull(),
+  acting_as_brand_id: text("acting_as_brand_id"),
   action: text("action").notNull(),
   target_type: text("target_type").notNull(),
   target_id: text("target_id").notNull(),

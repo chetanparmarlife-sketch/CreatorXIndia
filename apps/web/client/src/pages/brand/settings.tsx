@@ -4,12 +4,14 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtDate, fmtMoney } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type BrandProfile = {
   id: string;
   name: string;
   logo_url: string | null;
   verified: boolean;
+  status: "pending" | "approved" | "rejected";
   website: string | null;
   industry: string;
   description: string | null;
@@ -41,6 +43,8 @@ const NOTIFICATION_EVENTS = [
 ] as const;
 
 export default function BrandSettingsPage() {
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabKey>("profile");
   const [form, setForm] = useState({
@@ -53,7 +57,7 @@ export default function BrandSettingsPage() {
   const [notificationState, setNotificationState] = useState<Record<string, boolean>>({});
 
   const brandQuery = useQuery<{ brand: BrandProfile }>({
-    queryKey: ["brand", "profile"],
+    queryKey: ["brand", brandId, "profile"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/profile");
       return res.json() as Promise<{ brand: BrandProfile }>;
@@ -61,7 +65,7 @@ export default function BrandSettingsPage() {
   });
 
   const walletQuery = useQuery<WalletSummary>({
-    queryKey: ["brand", "wallet"],
+    queryKey: ["brand", brandId, "wallet"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/wallet");
       return res.json() as Promise<WalletSummary>;
@@ -69,7 +73,7 @@ export default function BrandSettingsPage() {
   });
 
   const invoicesQuery = useQuery<{ invoices: Invoice[] }>({
-    queryKey: ["brand", "invoices"],
+    queryKey: ["brand", brandId, "invoices"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/invoices");
       return res.json() as Promise<{ invoices: Invoice[] }>;
@@ -107,7 +111,7 @@ export default function BrandSettingsPage() {
       return res.json() as Promise<{ brand: BrandProfile }>;
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["brand", "profile"] });
+      await queryClient.invalidateQueries({ queryKey: ["brand", brandId, "profile"] });
       toast({ title: "Profile saved" });
     },
     onError: (error) => {
@@ -123,7 +127,7 @@ export default function BrandSettingsPage() {
     },
     onSuccess: async (data) => {
       setNotificationState(data.preferences);
-      await queryClient.invalidateQueries({ queryKey: ["brand", "profile"] });
+      await queryClient.invalidateQueries({ queryKey: ["brand", brandId, "profile"] });
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Could not update preferences";
@@ -250,7 +254,7 @@ export default function BrandSettingsPage() {
                 <div className="mt-1 text-2xl font-bold" data-testid="billing-wallet-balance">
                   {fmtMoney(balancePaise)}
                 </div>
-                <Link href="/brand/wallet" className="mt-3 inline-block text-sm text-primary underline" data-testid="link-open-wallet">
+                <Link href={`${brandBasePath}/wallet`} className="mt-3 inline-block text-sm text-primary underline" data-testid="link-open-wallet">
                   Open wallet
                 </Link>
               </div>

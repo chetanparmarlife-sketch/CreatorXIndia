@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { CreatorXMark, Icon } from "./brand";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import ImpersonationBanner from "@/pages/admin/impersonation-banner";
 
 const NAV = [
   { href: "/admin", icon: "dashboard", label: "Dashboard" },
@@ -94,7 +95,10 @@ export function AdminShell({ children, title, subtitle, actions }: {
             <div className="flex items-center gap-2 shrink-0">{actions}</div>
           </header>
         )}
-        <div className="px-8 py-6">{children}</div>
+        <div className="px-8 py-6">
+          <ImpersonationBanner />
+          {children}
+        </div>
       </main>
     </div>
   );

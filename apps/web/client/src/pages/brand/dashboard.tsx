@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { AuditLog } from "@creatorx/schema";
 import { Button } from "@/components/ui/button";
 import { fmtMoney, timeAgo } from "@/lib/format";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 interface BrandDashboardStats {
   activeCampaigns: number;
@@ -13,13 +14,15 @@ interface BrandDashboardStats {
 
 export default function BrandDashboardPage() {
   const [, navigate] = useLocation();
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
 
   const { data: stats } = useQuery<BrandDashboardStats>({
-    queryKey: ["/api/brand/dashboard-stats"],
+    queryKey: ["/api/brand/dashboard-stats", brandId],
   });
 
   const { data: activityData } = useQuery<{ activity: AuditLog[] }>({
-    queryKey: ["/api/brand/activity"],
+    queryKey: ["/api/brand/activity", brandId],
   });
 
   return (
@@ -30,7 +33,7 @@ export default function BrandDashboardPage() {
             <h1 className="text-3xl font-bold">Brand dashboard</h1>
             <p className="text-muted-foreground mt-1">Track campaign performance and recent actions.</p>
           </div>
-          <Button onClick={() => navigate("/brand/campaigns/new")} data-testid="btn-create-campaign">
+          <Button onClick={() => navigate(`${brandBasePath}/campaigns/new`)} data-testid="btn-create-campaign">
             Create Campaign
           </Button>
         </div>

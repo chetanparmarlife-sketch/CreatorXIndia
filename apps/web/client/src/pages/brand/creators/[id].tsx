@@ -7,6 +7,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtDate, fmtMoney } from "@/lib/format";
 import { Icon } from "@/components/brand";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type CreatorProfileResponse = {
   profile: {
@@ -63,6 +64,7 @@ function platformIcon(platform: SocialPlatform): string {
 }
 
 export default function CreatorProfilePage() {
+  const { brandId } = useBrandContext();
   const [matched, params] = useRoute<{ creatorId: string }>("/brand/creators/:creatorId");
   const { toast } = useToast();
   const creatorId = params?.creatorId ?? "";
@@ -70,7 +72,7 @@ export default function CreatorProfilePage() {
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
 
   const creatorQuery = useQuery<CreatorProfileResponse>({
-    queryKey: ["brand", "creator-profile", creatorId],
+    queryKey: ["brand", brandId, "creator-profile", creatorId],
     enabled: matched && creatorId.length > 0,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/brand/creators/${creatorId}`);
@@ -79,7 +81,7 @@ export default function CreatorProfilePage() {
   });
 
   const activeCampaignsQuery = useQuery<{ campaigns: ActiveCampaign[] }>({
-    queryKey: ["brand", "campaigns", "active", "invite-picker"],
+    queryKey: ["brand", brandId, "campaigns", "active", "invite-picker"],
     enabled: isInviteDialogOpen,
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/campaigns?status=active");
@@ -94,10 +96,10 @@ export default function CreatorProfilePage() {
     },
     onSuccess: async (_data, campaignId) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId, "stats"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "creator-profile", creatorId] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId, "stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "creator-profile", creatorId] }),
       ]);
       setIsInviteDialogOpen(false);
       setSelectedCampaignId("");

@@ -4,6 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtDate } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type TeamMember = {
   id: string;
@@ -23,13 +24,14 @@ type TeamMember = {
 };
 
 export default function BrandTeamPage() {
+  const { brandId } = useBrandContext();
   const { user } = useAuth();
   const { toast } = useToast();
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "member" | "viewer">("member");
 
   const teamQuery = useQuery<{ members: TeamMember[] }>({
-    queryKey: ["brand", "team"],
+    queryKey: ["brand", brandId, "team"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/team");
       return res.json() as Promise<{ members: TeamMember[] }>;
@@ -46,7 +48,7 @@ export default function BrandTeamPage() {
     },
     onSuccess: async () => {
       setInviteEmail("");
-      await queryClient.invalidateQueries({ queryKey: ["brand", "team"] });
+      await queryClient.invalidateQueries({ queryKey: ["brand", brandId, "team"] });
       toast({ title: "Invite sent" });
     },
     onError: (error) => {
@@ -61,7 +63,7 @@ export default function BrandTeamPage() {
       return res.json() as Promise<{ ok: true }>;
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["brand", "team"] });
+      await queryClient.invalidateQueries({ queryKey: ["brand", brandId, "team"] });
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Could not remove team member";

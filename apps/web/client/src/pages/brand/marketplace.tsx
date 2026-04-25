@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 import { Icon } from "@/components/brand";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type MarketplaceCreator = {
   id: string;
@@ -56,6 +57,7 @@ function platformIcon(platform: SocialPlatform): string {
 
 export default function MarketplacePage() {
   const [, navigate] = useLocation();
+  const { brandId } = useBrandContext();
 
   const [draftFilters, setDraftFilters] = useState<MarketplaceFilters>({
     search: "",
@@ -73,7 +75,7 @@ export default function MarketplacePage() {
   });
 
   const marketplaceQuery = useInfiniteQuery({
-    queryKey: ["brand", "marketplace", appliedFilters],
+    queryKey: ["brand", brandId, "marketplace", appliedFilters],
     initialPageParam: "" as string,
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();

@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtMoney, fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type WalletTransaction = {
   id: string;
@@ -100,12 +101,13 @@ function statusBadgeClass(status: WalletTransaction["status"]): string {
 }
 
 export default function WalletPage() {
+  const { brandId } = useBrandContext();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [topupAmountRupees, setTopupAmountRupees] = useState("1000");
 
   const { data: walletData, isLoading: walletLoading } = useQuery<WalletSummaryResponse>({
-    queryKey: ["brand", "wallet"],
+    queryKey: ["brand", brandId, "wallet"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/wallet");
       return res.json() as Promise<WalletSummaryResponse>;
@@ -113,7 +115,7 @@ export default function WalletPage() {
   });
 
   const { data: invoiceData, isLoading: invoicesLoading } = useQuery<{ invoices: Invoice[] }>({
-    queryKey: ["brand", "invoices"],
+    queryKey: ["brand", brandId, "invoices"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/brand/invoices");
       return res.json() as Promise<{ invoices: Invoice[] }>;
@@ -127,8 +129,8 @@ export default function WalletPage() {
     },
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["brand", "wallet"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "invoices"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "wallet"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "invoices"] }),
       ]);
       setIsDialogOpen(false);
       toast({ title: "Wallet top-up successful" });

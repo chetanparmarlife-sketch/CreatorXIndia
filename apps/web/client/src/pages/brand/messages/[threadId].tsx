@@ -5,6 +5,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type BrandThreadData = {
   thread: {
@@ -41,14 +42,18 @@ type BrandThreadData = {
 };
 
 export default function BrandThreadPage() {
-  const [matched, params] = useRoute<{ threadId: string }>("/brand/messages/:threadId");
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
+  const [brandMatched, brandParams] = useRoute<{ threadId: string }>("/brand/messages/:threadId");
+  const [adminMatched, adminParams] = useRoute<{ brandId: string; threadId: string }>("/admin/brands/:brandId/messages/:threadId");
+  const matched = brandMatched || adminMatched;
   const { toast } = useToast();
-  const threadId = params?.threadId ?? "";
+  const threadId = brandParams?.threadId ?? adminParams?.threadId ?? "";
   const [inputValue, setInputValue] = useState("");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const threadQuery = useQuery<BrandThreadData>({
-    queryKey: ["brand", "threads", threadId, "messages"],
+    queryKey: ["brand", brandId, "threads", threadId, "messages"],
     enabled: matched && threadId.length > 0,
     refetchInterval: 10_000,
     queryFn: async () => {
@@ -70,8 +75,8 @@ export default function BrandThreadPage() {
     onSuccess: async () => {
       setInputValue("");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["brand", "threads"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "threads", threadId, "messages"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "threads"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "threads", threadId, "messages"] }),
       ]);
     },
     onError: (error) => {
@@ -98,7 +103,7 @@ export default function BrandThreadPage() {
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
         <div className="rounded-2xl border border-border bg-card p-4">
-          <Link href="/brand/inbox" className="text-sm text-primary underline" data-testid="link-back-to-inbox">
+          <Link href={`${brandBasePath}/inbox`} className="text-sm text-primary underline" data-testid="link-back-to-inbox">
             Back to inbox
           </Link>
 

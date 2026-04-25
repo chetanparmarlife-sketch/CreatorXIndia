@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
 import { fmtMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type CampaignFilter = "all" | "draft" | "active" | "paused" | "completed";
 
@@ -38,10 +39,12 @@ function formatDeadline(iso: string): string {
 
 export default function CampaignListPage() {
   const [, navigate] = useLocation();
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
   const [filter, setFilter] = useState<CampaignFilter>("all");
 
   const { data, isLoading } = useQuery<{ campaigns: BrandCampaignListItem[] }>({
-    queryKey: ["brand", "campaigns", filter],
+    queryKey: ["brand", brandId, "campaigns", filter],
     queryFn: async () => {
       const path = filter === "all" ? "/api/brand/campaigns" : `/api/brand/campaigns?status=${filter}`;
       const res = await apiRequest("GET", path);
@@ -56,7 +59,7 @@ export default function CampaignListPage() {
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-3xl font-bold">Campaigns</h1>
-          <Button onClick={() => navigate("/brand/campaigns/new")} data-testid="btn-create-campaign">
+          <Button onClick={() => navigate(`${brandBasePath}/campaigns/new`)} data-testid="btn-create-campaign">
             Create Campaign
           </Button>
         </div>
@@ -117,7 +120,7 @@ export default function CampaignListPage() {
 
                   <Button
                     variant="outline"
-                    onClick={() => navigate(`/brand/campaigns/${campaign.id}`)}
+                    onClick={() => navigate(`${brandBasePath}/campaigns/${campaign.id}`)}
                     data-testid={`btn-view-campaign-${campaign.id}`}
                   >
                     View

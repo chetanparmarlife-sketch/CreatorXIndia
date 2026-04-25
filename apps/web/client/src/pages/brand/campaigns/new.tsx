@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type Platform = "instagram" | "youtube" | "twitter" | "linkedin";
 type DeliverableType = "post" | "reel" | "story" | "video";
@@ -17,6 +18,8 @@ const DELIVERABLE_OPTIONS: DeliverableType[] = ["post", "reel", "story", "video"
 
 export default function NewCampaignPage() {
   const [, navigate] = useLocation();
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
   const { toast } = useToast();
 
   const [title, setTitle] = useState("");
@@ -56,7 +59,7 @@ export default function NewCampaignPage() {
         queryClient.invalidateQueries({ queryKey: ["/api/brand/dashboard-stats"] }),
         queryClient.invalidateQueries({ queryKey: ["/api/brand/activity"] }),
       ]);
-      navigate("/brand/campaigns");
+      navigate(`${brandBasePath}/campaigns`);
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Could not create campaign";
@@ -215,7 +218,7 @@ export default function NewCampaignPage() {
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={() => navigate("/brand/dashboard")} data-testid="btn-cancel-campaign">
+            <Button type="button" variant="outline" onClick={() => navigate(`${brandBasePath}/dashboard`)} data-testid="btn-cancel-campaign">
               Cancel
             </Button>
             <Button type="submit" disabled={createMutation.isPending} data-testid="btn-submit-campaign">

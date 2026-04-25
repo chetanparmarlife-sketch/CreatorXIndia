@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useBrandContext } from "@/hooks/useBrandContext";
 
 type DeliverableFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -43,14 +44,18 @@ function statusClass(status: "pending" | "approved" | "rejected"): string {
 }
 
 export default function CampaignDeliverablesPage() {
-  const [matched, params] = useRoute<{ id: string }>("/brand/campaigns/:id/deliverables");
-  const campaignId = params?.id ?? "";
+  const { brandId, isAdmin } = useBrandContext();
+  const brandBasePath = isAdmin ? `/admin/brands/${brandId}` : "/brand";
+  const [brandMatched, brandParams] = useRoute<{ id: string }>("/brand/campaigns/:id/deliverables");
+  const [adminMatched, adminParams] = useRoute<{ brandId: string; id: string }>("/admin/brands/:brandId/campaigns/:id/deliverables");
+  const matched = brandMatched || adminMatched;
+  const campaignId = brandParams?.id ?? adminParams?.id ?? "";
   const [activeFilter, setActiveFilter] = useState<DeliverableFilter>("all");
   const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
   const { toast } = useToast();
 
   const { data, isLoading } = useQuery<CampaignDeliverablesResponse>({
-    queryKey: ["brand", "campaigns", campaignId, "deliverables", activeFilter],
+    queryKey: ["brand", brandId, "campaigns", campaignId, "deliverables", activeFilter],
     enabled: matched && campaignId.length > 0,
     queryFn: async () => {
       const path =
@@ -76,9 +81,9 @@ export default function CampaignDeliverablesPage() {
     },
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId, "deliverables"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId, "stats"] }),
-        queryClient.invalidateQueries({ queryKey: ["brand", "campaigns", campaignId] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId, "deliverables"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId, "stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["brand", brandId, "campaigns", campaignId] }),
       ]);
     },
     onError: (error) => {
@@ -96,7 +101,7 @@ export default function CampaignDeliverablesPage() {
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <Link
-          href={`/brand/campaigns/${campaignId}`}
+          href={`${brandBasePath}/campaigns/${campaignId}`}
           className="inline-flex items-center text-sm font-medium text-primary underline"
           data-testid="link-back-to-campaign"
         >
