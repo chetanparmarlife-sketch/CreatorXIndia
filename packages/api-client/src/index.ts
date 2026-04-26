@@ -13,10 +13,14 @@ import {
   type EarningTransaction,
   type EarningsSummary,
   type HomeStats,
+  type KycRecord,
   type Message,
   type Notification,
   type PaginatedCampaigns,
+  type PaymentMethods,
+  type PayoutRequest,
   type Thread,
+  type UploadPresignResponse,
 } from "./types";
 
 export { ApiError } from "./types";
@@ -33,10 +37,14 @@ export type {
   EarningTransaction,
   EarningsSummary,
   HomeStats,
+  KycRecord,
   Message,
   Notification,
   PaginatedCampaigns,
+  PaymentMethods,
+  PayoutRequest,
   Thread,
+  UploadPresignResponse,
 } from "./types";
 
 type HttpMethod = "GET" | "POST" | "PATCH";
@@ -354,7 +362,114 @@ const earningsResponseSchema = z.object({
   availableForWithdrawalPaise: z.number().optional(),
   totalEarnedPaise: z.number().optional(),
   pendingPaise: z.number().optional(),
+  upi_id: z.string().nullable().optional(),
+  upiId: z.string().nullable().optional(),
+  bank_account: z.string().nullable().optional(),
+  bankAccount: z.string().nullable().optional(),
   transactions: z.array(rawTransactionSchema).optional().default([]),
+}).passthrough();
+
+const withdrawalRequestSchema = z.object({
+  amountPaise: z.number().int().min(50_000, "Minimum withdrawal is ₹500"),
+}).strict();
+
+const rawPayoutRequestSchema = z.object({
+  id: z.string(),
+  creator_id: z.string().optional(),
+  creatorId: z.string().optional(),
+  amount_paise: z.number().optional(),
+  amountPaise: z.number().optional(),
+  status: z.enum(["pending", "processing", "completed", "failed"]),
+  upi_id: z.string().nullable().optional(),
+  upiId: z.string().nullable().optional(),
+  bank_account: z.string().nullable().optional(),
+  bankAccount: z.string().nullable().optional(),
+  razorpay_payout_id: z.string().nullable().optional(),
+  razorpayPayoutId: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+  createdAt: z.string().optional(),
+  updated_at: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).passthrough();
+
+const payoutRequestResponseSchema = z.object({
+  payoutRequest: rawPayoutRequestSchema,
+}).passthrough();
+
+const socialAccountsBodySchema = z.object({
+  instagram: z.string().trim().optional(),
+  youtube: z.string().trim().optional(),
+  twitter: z.string().trim().optional(),
+  linkedin: z.string().trim().optional(),
+}).strict();
+
+const upiBodySchema = z.object({
+  upiId: z.string().trim().regex(/^[a-z0-9._-]+@[a-z0-9.-]+$/i),
+}).strict();
+
+const bankAccountBodySchema = z.object({
+  accountNumber: z.string().trim().regex(/^[0-9]{9,18}$/),
+  ifsc: z.string().trim().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/i),
+  accountName: z.string().trim().min(1),
+}).strict();
+
+const paymentMethodsResponseSchema = z.object({
+  upiId: z.string().nullable(),
+  bankAccount: z.string().nullable(),
+}).passthrough();
+
+const rawKycSchema = z.object({
+  id: z.string().optional(),
+  creator_id: z.string().optional(),
+  creatorId: z.string().optional(),
+  pan_url: z.string().optional(),
+  panUrl: z.string().optional(),
+  aadhaar_url: z.string().optional(),
+  aadhaarUrl: z.string().optional(),
+  status: z.enum(["not_submitted", "pending", "approved", "rejected"]),
+  rejection_reason: z.string().nullable().optional(),
+  rejectionReason: z.string().nullable().optional(),
+  reviewed_by: z.string().nullable().optional(),
+  reviewedBy: z.string().nullable().optional(),
+  reviewed_at: z.string().nullable().optional(),
+  reviewedAt: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+  createdAt: z.string().optional(),
+  updated_at: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).passthrough();
+
+const kycResponseSchema = z.object({
+  kyc: rawKycSchema,
+}).passthrough();
+
+const kycBodySchema = z.object({
+  panUrl: z.string().trim().url(),
+  aadhaarUrl: z.string().trim().url(),
+}).strict();
+
+const notificationPreferencesBodySchema = z.object({
+  preferences: z.record(z.boolean()),
+}).strict();
+
+const notificationPreferencesResponseSchema = z.object({
+  preferences: z.record(z.boolean()),
+}).passthrough();
+
+const changeEmailBodySchema = z.object({
+  newEmail: z.string().trim().email(),
+}).strict();
+
+const uploadPresignBodySchema = z.object({
+  type: z.enum(["avatar", "kyc", "deliverable"]),
+  filename: z.string().trim().min(1),
+  campaignId: z.string().trim().min(1).optional(),
+}).strict();
+
+const uploadPresignResponseSchema = z.object({
+  uploadUrl: z.string().min(1),
+  publicUrl: z.string().optional(),
 }).passthrough();
 
 const stringRecordSchema = z.record(z.string());
@@ -696,8 +811,48 @@ function parseEarnings(data: unknown): EarningsSummary {
     totalEarnedPaise,
     pendingPaise,
     availableForWithdrawalPaise: raw.availableForWithdrawalPaise ?? raw.balance_cents ?? 0,
+    upiId: raw.upiId ?? raw.upi_id ?? null,
+    bankAccount: raw.bankAccount ?? raw.bank_account ?? null,
     transactions,
   };
+}
+
+function mapPayoutRequest(raw: z.infer<typeof rawPayoutRequestSchema>): PayoutRequest {
+  return {
+    id: raw.id,
+    creatorId: raw.creatorId ?? raw.creator_id ?? "",
+    amountPaise: raw.amountPaise ?? raw.amount_paise ?? 0,
+    status: raw.status,
+    upiId: raw.upiId ?? raw.upi_id ?? null,
+    bankAccount: raw.bankAccount ?? raw.bank_account ?? null,
+    razorpayPayoutId: raw.razorpayPayoutId ?? raw.razorpay_payout_id ?? null,
+    notes: raw.notes ?? null,
+    createdAt: raw.createdAt ?? raw.created_at ?? "",
+    updatedAt: raw.updatedAt ?? raw.updated_at ?? "",
+  };
+}
+
+function parsePayoutRequest(data: unknown): PayoutRequest {
+  return mapPayoutRequest(payoutRequestResponseSchema.parse(data).payoutRequest);
+}
+
+function mapKyc(raw: z.infer<typeof rawKycSchema>): KycRecord {
+  return {
+    id: raw.id,
+    creatorId: raw.creatorId ?? raw.creator_id,
+    panUrl: raw.panUrl ?? raw.pan_url,
+    aadhaarUrl: raw.aadhaarUrl ?? raw.aadhaar_url,
+    status: raw.status,
+    rejectionReason: raw.rejectionReason ?? raw.rejection_reason ?? null,
+    reviewedBy: raw.reviewedBy ?? raw.reviewed_by,
+    reviewedAt: raw.reviewedAt ?? raw.reviewed_at,
+    createdAt: raw.createdAt ?? raw.created_at,
+    updatedAt: raw.updatedAt ?? raw.updated_at,
+  };
+}
+
+function parseKyc(data: unknown): KycRecord {
+  return mapKyc(kycResponseSchema.parse(data).kyc);
 }
 
 function mapNotification(raw: z.infer<typeof rawNotificationSchema>): Notification {
@@ -877,6 +1032,69 @@ export function createApiClient(config: ApiClientConfig) {
         return parseEarnings(await get("/api/creator/earnings"));
       },
 
+      async requestWithdrawal(amountPaise: number): Promise<PayoutRequest> {
+        const body = withdrawalRequestSchema.parse({ amountPaise });
+        return parsePayoutRequest(await post("/api/creator/withdrawals", body));
+      },
+
+      async updateSocialAccounts(data: {
+        instagram?: string;
+        youtube?: string;
+        twitter?: string;
+        linkedin?: string;
+      }): Promise<void> {
+        const body = socialAccountsBodySchema.parse(data);
+        await patch("/api/creator/social-accounts", body);
+      },
+
+      async updateUpi(upiId: string): Promise<PaymentMethods> {
+        const body = upiBodySchema.parse({ upiId });
+        return paymentMethodsResponseSchema.parse(await patch("/api/creator/payment-methods/upi", body));
+      },
+
+      async updateBankAccount(data: {
+        accountNumber: string;
+        ifsc: string;
+        accountName: string;
+      }): Promise<PaymentMethods> {
+        const body = bankAccountBodySchema.parse(data);
+        return paymentMethodsResponseSchema.parse(await patch("/api/creator/payment-methods/bank", body));
+      },
+
+      async getKyc(): Promise<KycRecord> {
+        return parseKyc(await get("/api/creator/kyc"));
+      },
+
+      async submitKyc(data: { panUrl: string; aadhaarUrl: string }): Promise<KycRecord> {
+        const body = kycBodySchema.parse(data);
+        return parseKyc(await post("/api/creator/kyc", body));
+      },
+
+      async updateNotificationPreferences(preferences: Record<string, boolean>): Promise<Record<string, boolean>> {
+        const body = notificationPreferencesBodySchema.parse({ preferences });
+        return notificationPreferencesResponseSchema.parse(
+          await patch("/api/creator/notification-preferences", body),
+        ).preferences;
+      },
+
+      async logoutAll(): Promise<void> {
+        await post("/api/auth/logout-all");
+      },
+
+      async changeEmail(newEmail: string): Promise<void> {
+        const body = changeEmailBodySchema.parse({ newEmail });
+        await post("/api/creator/change-email", body);
+      },
+
+      async presignUpload(data: {
+        type: "avatar" | "kyc" | "deliverable";
+        filename: string;
+        campaignId?: string;
+      }): Promise<UploadPresignResponse> {
+        const body = uploadPresignBodySchema.parse(data);
+        return uploadPresignResponseSchema.parse(await post("/api/uploads/presign", body));
+      },
+
       async getNotifications(limit?: number): Promise<Notification[]> {
         return parseNotifications(await get(withQuery("/api/creator/notifications", {
           limit: limit === undefined ? undefined : String(limit),
@@ -896,6 +1114,20 @@ export function createApiClient(config: ApiClientConfig) {
 
     async registerPushToken(token: string, platform: "ios" | "android" | "web"): Promise<void> {
       await post("/api/push-tokens", { token, platform });
+    },
+
+    async uploadToPresignedUrl(uploadUrl: string): Promise<void> {
+      const url = z.string().url().parse(uploadUrl);
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "image/jpeg",
+        },
+        body: "",
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, await readErrorMessage(response));
+      }
     },
   };
 }

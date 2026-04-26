@@ -18,3 +18,4 @@
 | S14 | 5.1-5.3 | Expo Scaffold + Auth + API Client | 1 day | done |
 | S15 | 5.4-5.5 | Shell + 5 Tab Screens | 1 day | done |
 | S16 | 6.1-6.3 | Campaign Stack + Chat + Notifications | 1 day | done |
+| S17 | 6.4-6.5 | Withdraw + Settings Screens | 1 day | done |

@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import type { Campaign, HomeStats, Notification } from "@creatorx/api-client";
 import { CreatorShell } from "../../components/creator-shell";
@@ -108,7 +109,18 @@ export default function HomeScreen() {
   }
 
   return (
-    <CreatorShell title="Home">
+    <CreatorShell
+      title="Home"
+      rightElement={
+        <TouchableOpacity
+          testID="btn-settings"
+          onPress={() => router.push("/settings")}
+          className="h-10 w-10 items-center justify-center rounded-full bg-zinc-100"
+        >
+          <Ionicons name="settings-outline" size={20} color="#18181b" />
+        </TouchableOpacity>
+      }
+    >
       <FlatList
         data={[]}
         keyExtractor={(_, index) => String(index)}

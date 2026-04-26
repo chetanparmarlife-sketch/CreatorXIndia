@@ -7,12 +7,14 @@ import type {
   BrandTeamRole,
   Campaign,
   CommunityItem,
+  CreatorKyc,
   CreatorTier,
   Deliverable,
   Invoice,
   Message,
   MessageThread,
   Notification,
+  PayoutRequest,
   PushPlatform,
   Profile,
   SocialPlatform,
@@ -32,6 +34,7 @@ import {
   community as communityTable,
   computeTier,
   computeWithdrawalTax,
+  creator_kyc as creatorKycTable,
   db,
   deliverables as deliverablesTable,
   invoices as invoicesTable,
@@ -44,7 +47,9 @@ import {
   messages as messagesTable,
   nextInvoiceNumber,
   notifications as notificationsTable,
+  payout_requests as payoutRequestsTable,
   push_tokens as pushTokensTable,
+  refresh_tokens as refreshTokensTable,
   profiles as profilesTable,
   social_accounts as socialAccountsTable,
   suggestedPayoutMethod,
@@ -76,13 +81,30 @@ function currentFyStartIso(): string {
   return fyStart.toISOString();
 }
 
+export function maskBankAccount(accountNumber: string | null | undefined): string | null {
+  if (!accountNumber) return null;
+  const digits = accountNumber.replace(/\D/g, "");
+  if (digits.length === 0) return null;
+  return `XXXXXXXX${digits.slice(-4)}`;
+}
+
+function creatorNotificationPreferences(profile: Profile | null): Record<string, boolean> {
+  return {
+    campaign_invite: profile?.notif_push ?? true,
+    application_approved: profile?.notif_push ?? true,
+    deliverable_approved: profile?.notif_push ?? true,
+    message_received: profile?.notif_push ?? true,
+    payout_processed: profile?.notif_push ?? true,
+  };
+}
+
 function redactPII(input: unknown): unknown {
   if (Array.isArray(input)) return input.map((item) => redactPII(item));
   if (input && typeof input === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input)) {
       if (/(email|phone|pan|aadhaar_last4|upi_id|bank_account|ifsc|gstin)/i.test(k)) {
-        out[k] = "[REDACTED]";
+        out[k] = v === "[KYC_DOCUMENT]" ? "[KYC_DOCUMENT]" : "[REDACTED]";
       } else {
         out[k] = redactPII(v);
       }
@@ -207,8 +229,41 @@ export interface CreatorThreadMessages {
   messages: Message[];
 }
 
+export interface CreatorPaymentMethods {
+  upiId: string | null;
+  bankAccount: string | null;
+}
+
+export interface CreatorKycSummary {
+  id?: string;
+  creator_id?: string;
+  pan_url?: string;
+  aadhaar_url?: string;
+  status: CreatorKyc["status"] | "not_submitted";
+  rejection_reason: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface IStorage {
   upsertPushToken(userId: string, token: string, platform: PushPlatform): Promise<void>;
+  createPayoutRequest(creatorId: string, amountPaise: number): Promise<PayoutRequest>;
+  updateCreatorSocialAccounts(creatorId: string, handles: Partial<Record<SocialPlatform, string>>): Promise<SocialAccount[]>;
+  updateCreatorUpi(creatorId: string, upiId: string): Promise<CreatorPaymentMethods>;
+  updateCreatorBankAccount(
+    creatorId: string,
+    data: { accountNumber: string; ifsc: string; accountName: string },
+  ): Promise<CreatorPaymentMethods>;
+  createOrUpdateKyc(creatorId: string, panUrl: string, aadhaarUrl: string): Promise<CreatorKyc>;
+  getCreatorKyc(creatorId: string): Promise<CreatorKycSummary>;
+  updateCreatorNotificationPreferences(
+    creatorId: string,
+    preferences: Record<string, boolean>,
+  ): Promise<Record<string, boolean>>;
+  revokeAllRefreshTokens(userId: string): Promise<void>;
+  createPendingEmailChange(creatorId: string, newEmail: string): Promise<void>;
   getCreatorHomeStats(creatorId: string): Promise<CreatorHomeStats>;
   discoverCampaigns(
     filters: { search?: string; niche?: string },
@@ -527,7 +582,7 @@ export interface IStorage {
 export async function resetDb(): Promise<void> {
   await db.execute(
     sql.raw(
-      'TRUNCATE TABLE "wallet_transactions", "invoices", "push_tokens", "messages", "message_threads", "brand_team_members", "deliverables", "applications", "transactions", "withdrawals", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
+      'TRUNCATE TABLE "wallet_transactions", "invoices", "push_tokens", "messages", "message_threads", "brand_team_members", "deliverables", "applications", "transactions", "withdrawals", "payout_requests", "creator_kyc", "social_accounts", "community", "notifications", "campaigns", "brands", "audit_log", "profiles" CASCADE',
     ),
   );
   initPromise = null;
@@ -564,6 +619,291 @@ export async function upsertPushToken(userId: string, token: string, platform: P
 
   await db.insert(pushTokensTable).values(row);
   await writeAudit(userId, "create_push_token", "push_token", row.id, { platform });
+}
+
+export async function createPayoutRequest(creatorId: string, amountPaise: number): Promise<PayoutRequest> {
+  await ensureSeeded();
+
+  if (!Number.isInteger(amountPaise) || amountPaise < 50_000) {
+    throw new Error("INVALID_AMOUNT");
+  }
+
+  const profile = await profiles.byId(creatorId);
+  if (!profile) throw new Error("CREATOR_NOT_FOUND");
+
+  const available = await transactions.balanceCents(creatorId);
+  if (amountPaise > available) throw new Error("INSUFFICIENT_BALANCE");
+
+  const maskedBankAccount = maskBankAccount(profile.bank_account_number);
+  if (!profile.upi_id && !maskedBankAccount) throw new Error("PAYMENT_METHOD_REQUIRED");
+
+  const createdAt = now();
+  const row: PayoutRequest = {
+    id: newId(),
+    creator_id: creatorId,
+    amount_paise: amountPaise,
+    status: "pending",
+    upi_id: profile.upi_id,
+    bank_account: maskedBankAccount,
+    razorpay_payout_id: null,
+    notes: null,
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+
+  await db.transaction(async (tx) => {
+    await tx.insert(payoutRequestsTable).values(row);
+    await tx.insert(transactionsTable).values({
+      id: newId(),
+      user_id: creatorId,
+      kind: "withdrawal",
+      status: "pending",
+      amount_cents: -amountPaise,
+      description: "Withdrawal requested",
+      reference_id: row.id,
+      created_at: createdAt,
+    });
+  });
+
+  await writeAudit(creatorId, "create_payout_request", "payout_request", row.id, {
+    amount_paise: amountPaise,
+    upi_id: profile.upi_id ? "[REDACTED]" : null,
+    bank_account: maskedBankAccount ? "[REDACTED]" : null,
+  });
+
+  return row;
+}
+
+export async function updateCreatorSocialAccounts(
+  creatorId: string,
+  handles: Partial<Record<SocialPlatform, string>>,
+): Promise<SocialAccount[]> {
+  await ensureSeeded();
+
+  const platforms: SocialPlatform[] = ["instagram", "youtube", "twitter", "linkedin"];
+  for (const platform of platforms) {
+    const rawHandle = handles[platform];
+    if (rawHandle === undefined) continue;
+
+    const handle = rawHandle.trim();
+    const [existing] = await db
+      .select()
+      .from(socialAccountsTable)
+      .where(and(eq(socialAccountsTable.user_id, creatorId), eq(socialAccountsTable.platform, platform)))
+      .limit(1);
+
+    if (existing) {
+      await db
+        .update(socialAccountsTable)
+        .set({
+          handle,
+          connected: handle.length > 0,
+          connected_at: handle.length > 0 ? now() : null,
+          verified: false,
+          verification_note: null,
+        })
+        .where(eq(socialAccountsTable.id, existing.id));
+    } else if (handle.length > 0) {
+      await db.insert(socialAccountsTable).values({
+        id: newId(),
+        user_id: creatorId,
+        platform,
+        handle,
+        followers: 0,
+        engagement_rate: 0,
+        connected: true,
+        connected_at: now(),
+        verified: false,
+        verification_note: null,
+      });
+    }
+  }
+
+  await profiles.recomputeStats(creatorId);
+  await writeAudit(creatorId, "update_creator_social_accounts", "profile", creatorId, {
+    platforms: Object.keys(handles),
+  });
+  return socials.forUser(creatorId);
+}
+
+export async function updateCreatorUpi(creatorId: string, upiId: string): Promise<CreatorPaymentMethods> {
+  await ensureSeeded();
+
+  const cleanUpiId = upiId.trim();
+  if (!isValidUPI(cleanUpiId)) throw new Error("INVALID_UPI");
+
+  const [updated] = await db
+    .update(profilesTable)
+    .set({ upi_id: cleanUpiId })
+    .where(eq(profilesTable.id, creatorId))
+    .returning();
+  if (!updated) throw new Error("CREATOR_NOT_FOUND");
+
+  await writeAudit(creatorId, "update_creator_upi", "profile", creatorId, { upi_id: "[REDACTED]" });
+  return {
+    upiId: updated.upi_id,
+    bankAccount: maskBankAccount(updated.bank_account_number),
+  };
+}
+
+export async function updateCreatorBankAccount(
+  creatorId: string,
+  data: { accountNumber: string; ifsc: string; accountName: string },
+): Promise<CreatorPaymentMethods> {
+  await ensureSeeded();
+
+  const accountNumber = data.accountNumber.trim();
+  const ifsc = data.ifsc.trim().toUpperCase();
+  const accountName = data.accountName.trim();
+
+  if (!/^[0-9]{9,18}$/.test(accountNumber)) throw new Error("INVALID_ACCOUNT_NUMBER");
+  if (!isValidIFSC(ifsc)) throw new Error("INVALID_IFSC");
+  if (accountName.length === 0) throw new Error("INVALID_ACCOUNT_NAME");
+
+  const [updated] = await db
+    .update(profilesTable)
+    .set({
+      bank_account_number: accountNumber,
+      bank_ifsc: ifsc,
+      bank_account_holder: accountName,
+    })
+    .where(eq(profilesTable.id, creatorId))
+    .returning();
+  if (!updated) throw new Error("CREATOR_NOT_FOUND");
+
+  await writeAudit(creatorId, "update_creator_bank_account", "profile", creatorId, {
+    bank_account: "[REDACTED]",
+    ifsc: "[REDACTED]",
+    account_name: "[REDACTED]",
+  });
+  return {
+    upiId: updated.upi_id,
+    bankAccount: maskBankAccount(updated.bank_account_number),
+  };
+}
+
+export async function createOrUpdateKyc(creatorId: string, panUrl: string, aadhaarUrl: string): Promise<CreatorKyc> {
+  await ensureSeeded();
+
+  const existing = await db
+    .select()
+    .from(creatorKycTable)
+    .where(eq(creatorKycTable.creator_id, creatorId))
+    .limit(1);
+
+  const timestamp = now();
+  let row: CreatorKyc | undefined;
+
+  if (existing[0]) {
+    [row] = await db
+      .update(creatorKycTable)
+      .set({
+        pan_url: panUrl,
+        aadhaar_url: aadhaarUrl,
+        status: "pending",
+        rejection_reason: null,
+        reviewed_by: null,
+        reviewed_at: null,
+        updated_at: timestamp,
+      })
+      .where(eq(creatorKycTable.id, existing[0].id))
+      .returning();
+  } else {
+    row = {
+      id: newId(),
+      creator_id: creatorId,
+      pan_url: panUrl,
+      aadhaar_url: aadhaarUrl,
+      status: "pending",
+      rejection_reason: null,
+      reviewed_by: null,
+      reviewed_at: null,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    await db.insert(creatorKycTable).values(row);
+  }
+
+  if (!row) throw new Error("KYC_NOT_SAVED");
+
+  await db
+    .update(profilesTable)
+    .set({
+      kyc_status: "pending",
+      kyc_submitted_at: timestamp,
+      kyc_rejection_reason: null,
+    })
+    .where(eq(profilesTable.id, creatorId));
+
+  await writeAudit(creatorId, "submit_creator_kyc", "creator_kyc", row.id, {
+    pan_url: "[KYC_DOCUMENT]",
+    aadhaar_url: "[KYC_DOCUMENT]",
+  });
+  return row;
+}
+
+export async function getCreatorKyc(creatorId: string): Promise<CreatorKycSummary> {
+  await ensureSeeded();
+  const [row] = await db
+    .select()
+    .from(creatorKycTable)
+    .where(eq(creatorKycTable.creator_id, creatorId))
+    .limit(1);
+
+  if (row) return row;
+
+  const profile = await profiles.byId(creatorId);
+  const status =
+    profile?.kyc_status === "verified"
+      ? "approved"
+      : profile?.kyc_status === "pending"
+        ? "pending"
+        : profile?.kyc_status === "rejected"
+          ? "rejected"
+          : "not_submitted";
+  return {
+    status,
+    rejection_reason: profile?.kyc_rejection_reason ?? null,
+  };
+}
+
+export async function updateCreatorNotificationPreferences(
+  creatorId: string,
+  preferences: Record<string, boolean>,
+): Promise<Record<string, boolean>> {
+  await ensureSeeded();
+  const current = await profiles.byId(creatorId);
+  const merged = {
+    ...creatorNotificationPreferences(current),
+    ...preferences,
+  };
+
+  await db
+    .update(profilesTable)
+    .set({ notif_push: Object.values(merged).some(Boolean) })
+    .where(eq(profilesTable.id, creatorId));
+
+  await writeAudit(creatorId, "update_creator_notification_preferences", "profile", creatorId, {
+    preferences: merged,
+  });
+  return merged;
+}
+
+export async function revokeAllRefreshTokens(userId: string): Promise<void> {
+  await ensureSeeded();
+  await db
+    .update(refreshTokensTable)
+    .set({ revoked_at: now() })
+    .where(and(eq(refreshTokensTable.user_id, userId), isNull(refreshTokensTable.revoked_at)));
+
+  await writeAudit(userId, "logout_all_devices", "auth", userId, { revoked_all: true });
+}
+
+export async function createPendingEmailChange(creatorId: string, newEmail: string): Promise<void> {
+  await ensureSeeded();
+  await writeAudit(creatorId, "create_pending_email_change", "profile", creatorId, {
+    newEmail: newEmail.trim().toLowerCase(),
+  });
 }
 
 export async function getBrandProfile(userId: string): Promise<Brand> {
@@ -3618,11 +3958,14 @@ export const transactions = {
     const bonuses = tx
       .filter((t) => t.kind === "bonus" && t.status === "completed")
       .reduce((a, t) => a + t.amount_cents, 0);
+    const payoutRequests = tx
+      .filter((t) => t.kind === "withdrawal" && t.status === "pending" && t.amount_cents < 0)
+      .reduce((a, t) => a + Math.abs(t.amount_cents), 0);
     const withdrawn = ws
       .filter((w) => w.status === "approved" || w.status === "paid" || w.status === "requested")
       .reduce((a, w) => a + w.gross_cents, 0);
 
-    return earned + bonuses - withdrawn;
+    return earned + bonuses - withdrawn - payoutRequests;
   },
 
   async fyEarnedBefore(userId: string): Promise<number> {

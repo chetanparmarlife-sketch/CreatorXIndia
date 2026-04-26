@@ -142,6 +142,8 @@ export interface EarningsSummary {
   totalEarnedPaise: number;
   pendingPaise: number;
   availableForWithdrawalPaise: number;
+  upiId: string | null;
+  bankAccount: string | null;
   transactions: EarningTransaction[];
 }
 
@@ -169,6 +171,42 @@ export interface DashboardStats {
   totalSpentPaise: number;
   pendingApplications: number;
   approvedDeliverables: number;
+}
+
+export interface PayoutRequest {
+  id: string;
+  creatorId: string;
+  amountPaise: number;
+  status: "pending" | "processing" | "completed" | "failed";
+  upiId: string | null;
+  bankAccount: string | null;
+  razorpayPayoutId: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KycRecord {
+  id?: string;
+  creatorId?: string;
+  panUrl?: string;
+  aadhaarUrl?: string;
+  status: "not_submitted" | "pending" | "approved" | "rejected";
+  rejectionReason: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PaymentMethods {
+  upiId: string | null;
+  bankAccount: string | null;
+}
+
+export interface UploadPresignResponse {
+  uploadUrl: string;
+  publicUrl?: string;
 }
 
 export class ApiError extends Error {

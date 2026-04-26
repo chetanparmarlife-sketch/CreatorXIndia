@@ -20,6 +20,10 @@ import {
   getCreatorCampaignDetail, applyToCampaign, submitDeliverable, respondToInvite,
   getCreatorThreads, getCreatorThreadMessages, createCreatorMessage,
   markNotificationRead, markAllNotificationsRead,
+  createPayoutRequest, updateCreatorSocialAccounts, updateCreatorUpi,
+  updateCreatorBankAccount, createOrUpdateKyc, getCreatorKyc,
+  updateCreatorNotificationPreferences, revokeAllRefreshTokens as revokeAllStoredRefreshTokens,
+  createPendingEmailChange, maskBankAccount,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -41,7 +45,7 @@ import { z } from "zod";
 import {
   AuthError,
   generateOtp,
-  revokeAllRefreshTokens,
+  revokeAllRefreshTokens as revokeAllAuthRefreshTokens,
   revokeRefreshToken,
   signAccessToken,
   signRefreshToken,
@@ -208,6 +212,33 @@ const creatorInviteResponseSchema = z.object({
 }).strict();
 const creatorThreadMessageSchema = z.object({
   body: z.string().trim().min(1, "body is required").max(2000, "body must be at most 2000 characters"),
+}).strict();
+const creatorWithdrawalSchema = z.object({
+  amountPaise: z.coerce.number().int("amountPaise must be an integer").min(50_000, "Minimum withdrawal is ₹500"),
+}).strict();
+const creatorSocialAccountsSchema = z.object({
+  instagram: z.string().trim().optional(),
+  youtube: z.string().trim().optional(),
+  twitter: z.string().trim().optional(),
+  linkedin: z.string().trim().optional(),
+}).strict();
+const creatorUpiSchema = z.object({
+  upiId: z.string().trim().regex(/^[a-z0-9._-]+@[a-z0-9.-]+$/i, "upiId must be a valid UPI ID"),
+}).strict();
+const creatorBankAccountSchema = z.object({
+  accountNumber: z.string().trim().regex(/^[0-9]{9,18}$/, "accountNumber must be 9 to 18 digits"),
+  ifsc: z.string().trim().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/i, "ifsc must be valid"),
+  accountName: z.string().trim().min(1, "accountName is required"),
+}).strict();
+const creatorKycSchema = z.object({
+  panUrl: z.string().trim().url("panUrl must be a valid URL"),
+  aadhaarUrl: z.string().trim().url("aadhaarUrl must be a valid URL"),
+}).strict();
+const creatorNotificationPreferencesSchema = z.object({
+  preferences: z.record(z.boolean()),
+}).strict();
+const creatorChangeEmailSchema = z.object({
+  newEmail: z.string().trim().email("newEmail must be valid"),
 }).strict();
 
 function mapBrandFilterStatus(status?: z.infer<typeof brandCampaignStatusSchema>): Campaign["status"] | undefined {
@@ -448,7 +479,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (typeof refreshToken === "string" && refreshToken.trim().length > 0) {
         await revokeRefreshToken(refreshToken, user.id);
       } else {
-        await revokeAllRefreshTokens(user.id);
+        await revokeAllAuthRefreshTokens(user.id);
       }
       return res.json({ ok: true });
     } catch (error) {
@@ -457,6 +488,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       return res.status(500).json({ error: "Internal Server Error" });
     }
+  });
+
+  app.post("/api/auth/logout-all", requireAuth, async (req, res) => {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    await revokeAllStoredRefreshTokens(user.id);
+    return res.json({ ok: true });
   });
 
   // ------------------------------------------------------------------
@@ -477,6 +518,99 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const patch: Partial<Profile> = { ...parsed.data };
     const updated = await profiles.update(uid, patch);
     return res.json({ profile: updated });
+  });
+
+  app.patch("/api/creator/social-accounts", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorSocialAccountsSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const socialAccounts = await updateCreatorSocialAccounts(uid, parsed.data);
+    return res.json({ socials: socialAccounts });
+  });
+
+  app.patch("/api/creator/payment-methods/upi", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorUpiSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      return res.json(await updateCreatorUpi(uid, parsed.data.upiId));
+    } catch (error) {
+      if (error instanceof Error && error.message === "INVALID_UPI") {
+        return res.status(400).json({ error: "Invalid UPI ID" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.patch("/api/creator/payment-methods/bank", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorBankAccountSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      return res.json(await updateCreatorBankAccount(uid, parsed.data));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("INVALID_")) {
+        return res.status(400).json({ error: "Invalid bank account details" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  app.get("/api/creator/kyc", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    return res.json({ kyc: await getCreatorKyc(uid) });
+  });
+
+  app.post("/api/creator/kyc", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorKycSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    const kyc = await createOrUpdateKyc(uid, parsed.data.panUrl, parsed.data.aadhaarUrl);
+    return res.json({ kyc });
+  });
+
+  app.patch("/api/creator/notification-preferences", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorNotificationPreferencesSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    return res.json({
+      preferences: await updateCreatorNotificationPreferences(uid, parsed.data.preferences),
+    });
+  });
+
+  app.post("/api/creator/change-email", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorChangeEmailSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      await createPendingEmailChange(uid, parsed.data.newEmail);
+      await generateOtp(parsed.data.newEmail);
+      console.log("Email change OTP sent to:", parsed.data.newEmail);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
   });
 
   app.get("/api/creator/home-stats", async (req, res) => {
@@ -612,8 +746,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       kyc_status: me?.kyc_status,
       has_upi: !!me?.upi_id,
       has_bank: !!(me?.bank_account_number && me?.bank_ifsc),
+      upi_id: me?.upi_id ?? null,
+      bank_account: maskBankAccount(me?.bank_account_number),
       fy_earned_cents: me?.fy_earned_cents || 0,
     });
+  });
+
+  app.post("/api/creator/withdrawals", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const parsed = creatorWithdrawalSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid payload" });
+    }
+
+    try {
+      const payoutRequest = await createPayoutRequest(uid, parsed.data.amountPaise);
+      return res.json({ payoutRequest });
+    } catch (error) {
+      if (error instanceof Error && error.message === "INVALID_AMOUNT") {
+        return res.status(400).json({ error: "Minimum withdrawal is ₹500" });
+      }
+      if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
+        return res.status(400).json({ error: "Insufficient balance" });
+      }
+      if (error instanceof Error && error.message === "PAYMENT_METHOD_REQUIRED") {
+        return res.status(400).json({ error: "Add a payment method first" });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
   });
 
   app.get("/api/creator/notifications", async (req, res) => {

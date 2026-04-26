@@ -59,6 +59,8 @@ export type WithdrawalStatus =
   | "paid"
   | "rejected";
 
+export type PayoutRequestStatus = "pending" | "processing" | "completed" | "failed";
+
 export type SocialPlatform =
   | "instagram"
   | "youtube"
@@ -76,6 +78,7 @@ export type CreatorTier = "nano" | "micro" | "mid" | "macro" | "mega";
 
 // KYC verification status (RBI-aligned)
 export type KycStatus = "none" | "pending" | "verified" | "rejected";
+export type CreatorKycStatus = "not_submitted" | "pending" | "approved" | "rejected";
 
 // Payout payment method — UPI for small, IMPS/NEFT bank for large
 export type PayoutMethod = "upi" | "bank";
@@ -332,6 +335,32 @@ export interface Withdrawal {
   admin_note: string | null;
 }
 
+export interface PayoutRequest {
+  id: string;
+  creator_id: string;
+  amount_paise: number;
+  status: PayoutRequestStatus;
+  upi_id: string | null;
+  bank_account: string | null;
+  razorpay_payout_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatorKyc {
+  id: string;
+  creator_id: string;
+  pan_url: string;
+  aadhaar_url: string;
+  status: CreatorKycStatus;
+  rejection_reason: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CommunityItem {
   id: string;
   kind: EventKind;
@@ -445,6 +474,7 @@ export const deliverableStatusEnum = pgEnum("deliverable_status", ["pending", "s
 export const transactionTypeEnum = pgEnum("transaction_type", ["earning", "withdrawal", "bonus", "adjustment"]);
 export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "completed", "failed"]);
 export const withdrawalStatusEnum = pgEnum("withdrawal_status", ["requested", "approved", "paid", "rejected"]);
+export const payoutRequestStatusEnum = pgEnum("payout_request_status", ["pending", "processing", "completed", "failed"]);
 export const socialPlatformEnum = pgEnum("social_platform", ["instagram", "youtube", "twitter", "linkedin"]);
 export const pushPlatformEnum = pgEnum("push_platform", ["ios", "android", "web"]);
 export const walletTransactionTypeEnum = pgEnum("wallet_transaction_type", ["credit", "debit"]);
@@ -453,6 +483,7 @@ export const brandTeamRoleEnum = pgEnum("brand_team_role", ["admin", "member", "
 export const brandStatusEnum = pgEnum("brand_status", ["pending", "approved", "rejected"]);
 export const creatorTierEnum = pgEnum("creator_tier", ["nano", "micro", "mid", "macro", "mega"]);
 export const kycStatusEnum = pgEnum("kyc_status", ["none", "pending", "verified", "rejected"]);
+export const creatorKycStatusEnum = pgEnum("creator_kyc_status", ["not_submitted", "pending", "approved", "rejected"]);
 export const eventKindEnum = pgEnum("event_kind", ["event", "perk", "news"]);
 export const notificationKindEnum = pgEnum("notification_kind", [
   "application_accepted",
@@ -690,6 +721,32 @@ export const withdrawals = pgTable("withdrawals", {
   decided_at: text("decided_at"),
   paid_at: text("paid_at"),
   admin_note: text("admin_note"),
+});
+
+export const payout_requests = pgTable("payout_requests", {
+  id: text("id").primaryKey(),
+  creator_id: text("creator_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  amount_paise: integer("amount_paise").notNull(),
+  status: payoutRequestStatusEnum("status").notNull().default("pending"),
+  upi_id: text("upi_id"),
+  bank_account: text("bank_account"),
+  razorpay_payout_id: text("razorpay_payout_id"),
+  notes: text("notes"),
+  created_at: text("created_at").notNull(),
+  updated_at: text("updated_at").notNull(),
+});
+
+export const creator_kyc = pgTable("creator_kyc", {
+  id: text("id").primaryKey(),
+  creator_id: text("creator_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  pan_url: text("pan_url").notNull(),
+  aadhaar_url: text("aadhaar_url").notNull(),
+  status: creatorKycStatusEnum("status").notNull().default("pending"),
+  rejection_reason: text("rejection_reason"),
+  reviewed_by: text("reviewed_by"),
+  reviewed_at: text("reviewed_at"),
+  created_at: text("created_at").notNull(),
+  updated_at: text("updated_at").notNull(),
 });
 
 export const community = pgTable("community", {
