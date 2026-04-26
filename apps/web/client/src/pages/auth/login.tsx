@@ -23,6 +23,8 @@ export default function LoginPage() {
   }, [navigate, user]);
 
   async function onRequestOtp() {
+    if (isRequestingOtp || !email) return;
+
     setIsRequestingOtp(true);
     try {
       await requestOtp(email);
