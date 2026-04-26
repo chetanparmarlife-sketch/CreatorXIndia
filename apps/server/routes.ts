@@ -330,7 +330,11 @@ async function requireAdmin(req: Request, res: Response): Promise<string | null>
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, env: process.env.NODE_ENV, ts: new Date().toISOString() });
+    res.json({
+      ok: true,
+      env: process.env.ENV ?? process.env.NODE_ENV ?? "unknown",
+      ts: new Date().toISOString(),
+    });
   });
 
   app.use(
