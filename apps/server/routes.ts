@@ -332,7 +332,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/health", (_req, res) => {
     res.json({
       ok: true,
-      env: process.env.ENV ?? process.env.NODE_ENV ?? "unknown",
+      env: process.env.ENV ?? process.env.RAILWAY_ENVIRONMENT_NAME ?? process.env.NODE_ENV ?? "unknown",
       ts: new Date().toISOString(),
     });
   });

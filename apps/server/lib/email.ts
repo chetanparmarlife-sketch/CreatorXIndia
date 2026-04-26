@@ -1,13 +1,13 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 export async function sendOtpEmail(email: string, otp: string): Promise<void> {
-  if (!process.env.RESEND_API_KEY) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
     console.log(`OTP for ${email}: ${otp}`);
     return;
   }
 
+  const resend = new Resend(apiKey);
   await resend.emails.send({
     from: "CreatorX <otp@creator-x.club>",
     to: email,
