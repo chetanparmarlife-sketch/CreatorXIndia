@@ -423,8 +423,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     try {
-      await generateOtp(email);
-      console.log("OTP sent to:", email);
+      const otp = await generateOtp(email);
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`OTP for ${email}: ${otp}`);
+      } else {
+        console.log("OTP sent to:", email);
+      }
       return res.json({ ok: true });
     } catch (error) {
       if (error instanceof AuthError) {
@@ -613,8 +617,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     try {
       await createPendingEmailChange(uid, parsed.data.newEmail);
-      await generateOtp(parsed.data.newEmail);
-      console.log("Email change OTP sent to:", parsed.data.newEmail);
+      const otp = await generateOtp(parsed.data.newEmail);
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`Email change OTP for ${parsed.data.newEmail}: ${otp}`);
+      } else {
+        console.log("Email change OTP sent to:", parsed.data.newEmail);
+      }
       return res.json({ ok: true });
     } catch (error) {
       if (error instanceof AuthError) {
