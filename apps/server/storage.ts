@@ -2871,7 +2871,9 @@ export const profiles = {
   },
 
   async byEmail(email: string): Promise<Profile | null> {
-    await ensureSeeded();
+    if (process.env.NODE_ENV === "development") {
+      await ensureSeeded();
+    }
     const [row] = await db
       .select()
       .from(profilesTable)
