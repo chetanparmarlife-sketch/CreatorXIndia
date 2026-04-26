@@ -1,6 +1,7 @@
 import express, { Response, NextFunction } from "express";
 import type { Request, Express } from "express";
 import { createServer } from "node:http";
+import cors from "cors";
 import { registerRoutes } from "./routes";
 
 declare module "http" {
@@ -23,6 +24,25 @@ export function log(message: string, source = "express") {
 export async function createApp() {
   const app = express();
   const httpServer = createServer(app);
+
+  app.use(cors({
+    origin: [
+      'https://creator-x-sandy.vercel.app',
+      'https://creatorx-pearl.vercel.app', 
+      'https://creator-x-india-schema.vercel.app',
+      'https://app.creator-x.club',
+      'https://staging.creator-x.club',
+      'http://localhost:5173',
+      'http://localhost:3000',
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type', 
+      'Authorization', 
+      'X-Acting-As-Brand'
+    ],
+  }));
 
   app.use(
     express.json({
