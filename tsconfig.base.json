@@ -19,7 +19,9 @@
       "@creatorx/api-client": ["./packages/api-client/src/index.ts"],
       "@creatorx/api-client/*": ["./packages/api-client/src/*"],
       "@creatorx/design-tokens": ["./packages/design-tokens/src/index.ts"],
-      "@creatorx/design-tokens/*": ["./packages/design-tokens/src/*"]
+      "@creatorx/design-tokens/*": ["./packages/design-tokens/src/*"],
+      "@creatorx/ui": ["./packages/ui/src/index.ts"],
+      "@creatorx/ui/*": ["./packages/ui/src/*"]
     }
   }
 }

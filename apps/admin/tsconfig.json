@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "vite.config.ts", "tailwind.config.ts"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": ["apps/admin/src/*"],
+      "@creatorx/schema": ["packages/schema/src/index.ts"],
+      "@creatorx/schema/*": ["packages/schema/src/*"],
+      "@creatorx/ui": ["packages/ui/src/index.ts"],
+      "@creatorx/ui/*": ["packages/ui/src/*"],
+      "@creatorx/design-tokens": ["packages/design-tokens/src/index.ts"]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@creatorx/brand-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite --config vite.config.ts build"
+  },
+  "dependencies": {
+    "@creatorx/design-tokens": "workspace:*",
+    "@creatorx/schema": "workspace:*",
+    "@creatorx/ui": "workspace:*"
+  }
+}
