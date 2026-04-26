@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { Profile, UserRole } from "@creatorx/schema/server";
 import { audit_log, db, otp_codes, profiles, refresh_tokens } from "@creatorx/schema/server";
+import { sendOtpEmail } from "./lib/email.js";
 
 export type AccessTokenRole =
   | "creator"
@@ -188,6 +189,7 @@ export async function generateOtp(email: string): Promise<string> {
   });
 
   await logAuthEvent("system", "otp_requested", rowId, { email: normalizedEmail });
+  await sendOtpEmail(normalizedEmail, otp);
   return otp;
 }
 

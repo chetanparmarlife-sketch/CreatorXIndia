@@ -16,7 +16,8 @@
     "cors": "^2.8.6",
     "drizzle-kit": "^0.31.8",
     "jsonwebtoken": "^9.0.2",
-    "razorpay": "^2.9.6"
+    "razorpay": "^2.9.6",
+    "resend": "^3.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
