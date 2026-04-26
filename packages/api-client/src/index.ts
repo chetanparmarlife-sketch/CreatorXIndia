@@ -445,8 +445,8 @@ const kycResponseSchema = z.object({
 }).passthrough();
 
 const kycBodySchema = z.object({
-  panUrl: z.string().trim().url(),
-  aadhaarUrl: z.string().trim().url(),
+  panUrl: z.string().trim().min(1),
+  aadhaarUrl: z.string().trim().min(1),
 }).strict();
 
 const notificationPreferencesBodySchema = z.object({
@@ -470,6 +470,7 @@ const uploadPresignBodySchema = z.object({
 const uploadPresignResponseSchema = z.object({
   uploadUrl: z.string().min(1),
   publicUrl: z.string().optional(),
+  uploadKey: z.string().optional(),
 }).passthrough();
 
 const stringRecordSchema = z.record(z.string());

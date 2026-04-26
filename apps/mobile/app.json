@@ -8,14 +8,43 @@
     "platforms": ["ios", "android"],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "app.creatorx.mobile"
+      "bundleIdentifier": "app.creatorx.mobile",
+      "associatedDomains": ["applinks:app.creatorx.app"]
     },
     "android": {
       "package": "app.creatorx.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "android.intent.action.VIEW",
+          "data": {
+            "scheme": "https",
+            "host": "app.creatorx.app"
+          },
+          "category": [
+            "android.intent.category.DEFAULT",
+            "android.intent.category.BROWSABLE"
+          ]
+        }
+      ]
     },
-    "plugins": ["expo-router", "expo-secure-store"]
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CreatorX uses your photo library to upload avatars and campaign deliverables."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow CreatorX to use Face ID to unlock the app."
+        }
+      ]
+    ]
   }
 }

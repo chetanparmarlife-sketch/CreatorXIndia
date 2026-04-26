@@ -16,6 +16,7 @@ import { INDIAN_LANGUAGES, INDIAN_NICHES } from "@creatorx/schema";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreatorProfile } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
+import { pickAndUploadImage } from "../../lib/image-upload";
 import { createMobileApiClient } from "../../lib/queryClient";
 
 function showToast(message: string) {
@@ -57,6 +58,7 @@ export default function ProfileSettingsScreen() {
   const [bio, setBio] = useState("");
   const [niches, setNiches] = useState<string[]>([]);
   const [languages, setLanguages] = useState<string[]>([]);
+  const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null);
 
   const profileQuery = useQuery<CreatorProfile>({
     queryKey: ["creator", "profile"],
@@ -88,17 +90,21 @@ export default function ProfileSettingsScreen() {
 
   const avatarMutation = useMutation({
     mutationFn: async () => {
-      const filename = `${Date.now()}.jpg`;
-      const upload = await api.creator.presignUpload({ type: "avatar", filename });
-      await api.uploadToPresignedUrl(upload.uploadUrl);
-      if (!upload.publicUrl) throw new Error("Avatar upload URL missing");
-      return api.creator.updateProfile({ avatarUrl: upload.publicUrl });
+      setAvatarUploadProgress(0);
+      const publicUrl = await pickAndUploadImage({
+        type: "avatar",
+        onProgress: setAvatarUploadProgress,
+      });
+      if (!publicUrl) return null;
+      return api.creator.updateProfile({ avatarUrl: publicUrl });
     },
-    onSuccess: async () => {
+    onSuccess: async (profile) => {
+      if (!profile) return;
       await queryClient.invalidateQueries({ queryKey: ["creator", "profile"] });
       showToast("Profile updated!");
     },
     onError: (error) => Alert.alert("Could not upload avatar", error instanceof Error ? error.message : "Please try again."),
+    onSettled: () => setAvatarUploadProgress(null),
   });
 
   function toggleValue(value: string, selected: string[], setSelected: (next: string[]) => void) {
@@ -154,6 +160,13 @@ export default function ProfileSettingsScreen() {
                     <Text className="text-sm font-black text-indigo-700">Upload avatar</Text>
                   )}
                 </TouchableOpacity>
+                {avatarMutation.isPending && avatarUploadProgress !== null ? (
+                  <View testID="upload-progress-avatar" className="mt-3 rounded-lg bg-indigo-50 px-3 py-2">
+                    <Text className="text-xs font-black text-indigo-700">
+                      Uploading {avatarUploadProgress}%
+                    </Text>
+                  </View>
+                ) : null}
               </View>
 
               <View testID="select-niches" className="mt-4 rounded-lg border border-zinc-200 bg-white p-4">

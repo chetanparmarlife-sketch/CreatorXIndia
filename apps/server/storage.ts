@@ -59,6 +59,7 @@ import {
 } from "@creatorx/schema/server";
 import { seed } from "./seed";
 import { getAuditContext } from "./middleware/impersonate";
+import { sendPushToUser } from "./lib/push";
 
 const newId = () => nanoid(12);
 const now = () => new Date().toISOString();
@@ -1261,6 +1262,14 @@ export async function createMessage(
     thread_id: threadId,
   });
 
+  const brand = await brands.byId(brandId);
+  await sendPushToUser(thread.creator_id, {
+    title: `New message from ${brand?.name ?? "Brand"}`,
+    body: body.trim().slice(0, 60),
+    data: { type: "message_received", threadId },
+    categoryIdentifier: "message_received",
+  });
+
   return msg;
 }
 
@@ -1356,6 +1365,14 @@ export async function createOrGetThread(
 
   await writeAudit(brandId, "brand_send_message", "message", msg.id, {
     thread_id: threadId,
+  });
+
+  const brand = await brands.byId(brandId);
+  await sendPushToUser(creatorId, {
+    title: `New message from ${brand?.name ?? "Brand"}`,
+    body: body.trim().slice(0, 60),
+    data: { type: "message_received", threadId },
+    categoryIdentifier: "message_received",
   });
 
   return { threadId };
@@ -2802,6 +2819,15 @@ export async function inviteCreatorToCampaign(
     creator_id: creatorId,
     status: "invited",
   });
+
+  const brand = await brands.byId(brandId);
+  await sendPushToUser(creatorId, {
+    title: "Campaign Invite 📩",
+    body: `${brand?.name ?? "Brand"} invited you to ${campaign.title}`,
+    data: { type: "campaign_invite", campaignId },
+    categoryIdentifier: "campaign_invite",
+  });
+
   return row;
 }
 
@@ -3624,6 +3650,13 @@ export const applications = {
         body: `You're in for ${c?.title || "the campaign"}.`,
         link: `/campaigns/${a.campaign_id}`,
       });
+
+      await sendPushToUser(a.creator_id, {
+        title: "Application Approved 🎉",
+        body: c?.title || "Campaign",
+        data: { type: "application_approved", campaignId: a.campaign_id },
+        categoryIdentifier: "application_approved",
+      });
     } else {
       await notifications.push(a.creator_id, {
         kind: "application_rejected",
@@ -3779,6 +3812,12 @@ export const deliverables = {
         link: "/earnings",
       });
 
+      await sendPushToUser(d.creator_id, {
+        title: "Deliverable Approved ✅",
+        body: c.title,
+        data: { type: "deliverable_approved", campaignId: d.campaign_id },
+      });
+
       await profiles.recomputeStats(d.creator_id);
     } else if (status === "revision") {
       await notifications.push(d.creator_id, {
@@ -3865,6 +3904,16 @@ export const messages = {
       .where(eq(messageThreadsTable.id, threadId));
 
     await writeAudit(senderId, "send_message", "message", msg.id, { thread_id: threadId });
+    if (senderRole === "brand") {
+      const brandId = senderId.startsWith("brand:") ? senderId.slice("brand:".length) : t.brand_id;
+      const brand = await brands.byId(brandId);
+      await sendPushToUser(t.creator_id, {
+        title: `New message from ${brand?.name ?? "Brand"}`,
+        body: body.trim().slice(0, 60),
+        data: { type: "message_received", threadId },
+        categoryIdentifier: "message_received",
+      });
+    }
     return msg;
   },
 
@@ -4181,6 +4230,12 @@ export const withdrawals = {
         title: "Withdrawal paid",
         body: `${formatted} sent via ${updated.method.toUpperCase()} to ${updated.destination}. UTR: ${updated.utr}`,
         link: "/earnings",
+      });
+
+      await sendPushToUser(updated.user_id, {
+        title: "Payout Processed 💸",
+        body: `${formatted} has been sent to your account`,
+        data: { type: "payout_processed", payoutId: updated.id },
       });
     }
 

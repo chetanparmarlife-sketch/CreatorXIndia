@@ -231,8 +231,8 @@ const creatorBankAccountSchema = z.object({
   accountName: z.string().trim().min(1, "accountName is required"),
 }).strict();
 const creatorKycSchema = z.object({
-  panUrl: z.string().trim().url("panUrl must be a valid URL"),
-  aadhaarUrl: z.string().trim().url("aadhaarUrl must be a valid URL"),
+  panUrl: z.string().trim().min(1, "panUrl is required"),
+  aadhaarUrl: z.string().trim().min(1, "aadhaarUrl is required"),
 }).strict();
 const creatorNotificationPreferencesSchema = z.object({
   preferences: z.record(z.boolean()),
@@ -1633,7 +1633,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const uploadUrl = await getUploadUrl(key);
       if (type === "kyc") {
-        return res.json({ uploadUrl });
+        return res.json({ uploadUrl, uploadKey: key });
       }
       return res.json({ uploadUrl, publicUrl: getPublicUrl(key) });
     } catch {

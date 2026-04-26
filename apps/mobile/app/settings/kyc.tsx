@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { KycRecord } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
+import { pickAndUploadImage } from "../../lib/image-upload";
 import { createMobileApiClient } from "../../lib/queryClient";
 
 function showToast(message: string) {
@@ -24,15 +25,15 @@ function showToast(message: string) {
   Alert.alert(message);
 }
 
-function documentUrlFromUpload(uploadUrl: string): string {
-  return uploadUrl.split("?")[0] ?? uploadUrl;
+function fileNameFromKey(uploadKey: string): string {
+  return uploadKey.split("/").pop() ?? uploadKey;
 }
 
 export default function KycSettingsScreen() {
   const api = useMemo(() => createMobileApiClient(), []);
   const queryClient = useQueryClient();
-  const [panUrl, setPanUrl] = useState<string | null>(null);
-  const [aadhaarUrl, setAadhaarUrl] = useState<string | null>(null);
+  const [panUploadKey, setPanUploadKey] = useState<string | null>(null);
+  const [aadhaarUploadKey, setAadhaarUploadKey] = useState<string | null>(null);
 
   const kycQuery = useQuery<KycRecord>({
     queryKey: ["creator", "kyc"],
@@ -41,14 +42,13 @@ export default function KycSettingsScreen() {
 
   const uploadMutation = useMutation({
     mutationFn: async (type: "pan" | "aadhaar") => {
-      const filename = `${type}-${Date.now()}.jpg`;
-      const upload = await api.creator.presignUpload({ type: "kyc", filename });
-      await api.uploadToPresignedUrl(upload.uploadUrl);
-      return { type, url: documentUrlFromUpload(upload.uploadUrl) };
+      const uploadKey = await pickAndUploadImage({ type: "kyc" });
+      return { type, uploadKey };
     },
-    onSuccess: ({ type, url }) => {
-      if (type === "pan") setPanUrl(url);
-      if (type === "aadhaar") setAadhaarUrl(url);
+    onSuccess: ({ type, uploadKey }) => {
+      if (!uploadKey) return;
+      if (type === "pan") setPanUploadKey(uploadKey);
+      if (type === "aadhaar") setAadhaarUploadKey(uploadKey);
       showToast("Document uploaded!");
     },
     onError: (error) => Alert.alert("Could not upload document", error instanceof Error ? error.message : "Please try again."),
@@ -56,8 +56,8 @@ export default function KycSettingsScreen() {
 
   const submitMutation = useMutation({
     mutationFn: () => api.creator.submitKyc({
-      panUrl: panUrl ?? "",
-      aadhaarUrl: aadhaarUrl ?? "",
+      panUrl: panUploadKey ?? "",
+      aadhaarUrl: aadhaarUploadKey ?? "",
     }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["creator", "kyc"] });
@@ -68,7 +68,7 @@ export default function KycSettingsScreen() {
 
   const status = kycQuery.data?.status ?? "not_submitted";
   const canUpload = status !== "approved";
-  const canSubmit = Boolean(panUrl && aadhaarUrl) && !submitMutation.isPending;
+  const canSubmit = Boolean(panUploadKey && aadhaarUploadKey) && !submitMutation.isPending;
 
   return (
     <SafeAreaView className="flex-1 bg-white" edges={["top"]}>
@@ -102,8 +102,15 @@ export default function KycSettingsScreen() {
                     onPress={() => uploadMutation.mutate("pan")}
                     className="h-12 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50"
                   >
-                    <Text className="text-sm font-black text-indigo-700">{panUrl ? "PAN uploaded" : "Upload PAN card"}</Text>
+                    <Text className="text-sm font-black text-indigo-700">
+                      {panUploadKey ? "PAN uploaded" : "Upload PAN card"}
+                    </Text>
                   </TouchableOpacity>
+                  {panUploadKey ? (
+                    <Text testID="kyc-pan-filename" className="mt-2 text-xs font-bold text-zinc-500">
+                      {fileNameFromKey(panUploadKey)}
+                    </Text>
+                  ) : null}
 
                   <TouchableOpacity
                     testID="btn-upload-aadhaar"
@@ -112,9 +119,14 @@ export default function KycSettingsScreen() {
                     className="mt-3 h-12 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50"
                   >
                     <Text className="text-sm font-black text-indigo-700">
-                      {aadhaarUrl ? "Aadhaar uploaded" : "Upload Aadhaar"}
+                      {aadhaarUploadKey ? "Aadhaar uploaded" : "Upload Aadhaar"}
                     </Text>
                   </TouchableOpacity>
+                  {aadhaarUploadKey ? (
+                    <Text testID="kyc-aadhaar-filename" className="mt-2 text-xs font-bold text-zinc-500">
+                      {fileNameFromKey(aadhaarUploadKey)}
+                    </Text>
+                  ) : null}
 
                   <TouchableOpacity
                     testID="btn-submit-kyc"

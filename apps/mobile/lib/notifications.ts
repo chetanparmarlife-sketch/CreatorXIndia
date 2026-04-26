@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { router } from "expo-router";
+import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { createMobileApiClient } from "./queryClient";
 
@@ -19,17 +20,59 @@ function stringValue(data: NotificationData, key: string): string | null {
 }
 
 export async function registerForPushNotifications(): Promise<string | null> {
+  if (!Constants.isDevice) {
+    console.warn("[notifications] Push registration skipped on simulator.");
+    return null;
+  }
+
   const permission = await Notifications.requestPermissionsAsync();
   if (permission.status !== "granted") return null;
 
-  const result = await Notifications.getExpoPushTokenAsync();
-  const token = result.data;
-  await createMobileApiClient().registerPushToken(token, mobilePlatform());
-  return token;
+  try {
+    const result = await Notifications.getExpoPushTokenAsync({
+      projectId: Constants.expoConfig?.extra?.eas?.projectId,
+    });
+    const token = result.data;
+    await createMobileApiClient().registerPushToken(token, mobilePlatform());
+    return token;
+  } catch (error) {
+    console.warn("[notifications] Push registration failed.", error);
+    return null;
+  }
 }
 
-export function handleNotificationResponse(response: Notifications.NotificationResponse): void {
-  const data = response.notification.request.content.data as NotificationData;
+export async function setNotificationCategories(): Promise<void> {
+  await Promise.all([
+    Notifications.setNotificationCategoryAsync("campaign_invite", [
+      {
+        identifier: "accept",
+        buttonTitle: "Accept",
+        options: { opensAppToForeground: true },
+      },
+      {
+        identifier: "decline",
+        buttonTitle: "Decline",
+        options: { opensAppToForeground: false },
+      },
+    ]),
+    Notifications.setNotificationCategoryAsync("message_received", [
+      {
+        identifier: "reply",
+        buttonTitle: "Reply",
+        options: { opensAppToForeground: true },
+      },
+    ]),
+    Notifications.setNotificationCategoryAsync("application_approved", [
+      {
+        identifier: "view",
+        buttonTitle: "View Campaign",
+        options: { opensAppToForeground: true },
+      },
+    ]),
+  ]);
+}
+
+function routeNotificationData(data: NotificationData): void {
   const type = stringValue(data, "type");
   const campaignId = stringValue(data, "campaignId") ?? stringValue(data, "campaign_id");
   const threadId = stringValue(data, "threadId") ?? stringValue(data, "thread_id");
@@ -50,4 +93,42 @@ export function handleNotificationResponse(response: Notifications.NotificationR
   }
 
   router.push("/(tabs)/notifications");
+}
+
+export async function handleNotificationAction(response: Notifications.NotificationResponse): Promise<void> {
+  const data = response.notification.request.content.data as NotificationData;
+  const campaignId = stringValue(data, "campaignId") ?? stringValue(data, "campaign_id");
+  const threadId = stringValue(data, "threadId") ?? stringValue(data, "thread_id");
+  const api = createMobileApiClient();
+
+  try {
+    if (response.actionIdentifier === "accept" && campaignId) {
+      await api.creator.respondToInvite(campaignId, true);
+      router.push(`/campaigns/${campaignId}`);
+      return;
+    }
+
+    if (response.actionIdentifier === "decline" && campaignId) {
+      await api.creator.respondToInvite(campaignId, false);
+      return;
+    }
+
+    if (response.actionIdentifier === "reply" && threadId) {
+      router.push(`/inbox/${threadId}`);
+      return;
+    }
+
+    if (response.actionIdentifier === "view" && campaignId) {
+      router.push(`/campaigns/${campaignId}`);
+      return;
+    }
+  } catch (error) {
+    console.warn("[notifications] Could not handle notification action.", error);
+  }
+
+  routeNotificationData(data);
+}
+
+export function handleNotificationResponse(response: Notifications.NotificationResponse): void {
+  void handleNotificationAction(response);
 }

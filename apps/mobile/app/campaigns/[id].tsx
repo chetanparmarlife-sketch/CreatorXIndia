@@ -19,6 +19,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CampaignDetail } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
+import { pickAndUploadImage } from "../../lib/image-upload";
 import { createMobileApiClient } from "../../lib/queryClient";
 import { formatINR, formatShortDate, platformIcon } from "../../lib/format";
 
@@ -58,6 +59,7 @@ export default function CampaignDetailScreen() {
   const [coverNote, setCoverNote] = useState("");
   const [contentUrl, setContentUrl] = useState("");
   const [deliverableNotes, setDeliverableNotes] = useState("");
+  const [mediaUploadProgress, setMediaUploadProgress] = useState<number | null>(null);
 
   const detailQuery = useQuery<CampaignDetail>({
     queryKey: ["creator", "campaigns", campaignId],
@@ -96,6 +98,24 @@ export default function CampaignDetailScreen() {
       showToast("Deliverable submitted!");
     },
     onError: (error) => Alert.alert("Could not submit", error instanceof Error ? error.message : "Please try again."),
+  });
+
+  const mediaUploadMutation = useMutation({
+    mutationFn: async () => {
+      setMediaUploadProgress(0);
+      return pickAndUploadImage({
+        type: "deliverable",
+        campaignId,
+        onProgress: setMediaUploadProgress,
+      });
+    },
+    onSuccess: (publicUrl) => {
+      if (!publicUrl) return;
+      setContentUrl(publicUrl);
+      showToast("Media uploaded!");
+    },
+    onError: (error) => Alert.alert("Could not upload media", error instanceof Error ? error.message : "Please try again."),
+    onSettled: () => setMediaUploadProgress(null),
   });
 
   const inviteMutation = useMutation({
@@ -294,6 +314,18 @@ export default function CampaignDetailScreen() {
               keyboardType="url"
               className="mt-4 rounded-xl border border-zinc-200 px-4 py-3 text-base text-zinc-950"
             />
+            <TouchableOpacity
+              testID="btn-upload-media"
+              onPress={() => mediaUploadMutation.mutate()}
+              disabled={mediaUploadMutation.isPending}
+              className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 py-3"
+            >
+              <Text className="text-center text-sm font-black text-indigo-700">
+                {mediaUploadMutation.isPending
+                  ? `Uploading ${mediaUploadProgress ?? 0}%`
+                  : "Upload Media"}
+              </Text>
+            </TouchableOpacity>
             <TextInput
               testID="input-deliverable-notes"
               value={deliverableNotes}

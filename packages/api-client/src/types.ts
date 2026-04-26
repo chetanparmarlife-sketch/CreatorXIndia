@@ -207,6 +207,7 @@ export interface PaymentMethods {
 export interface UploadPresignResponse {
   uploadUrl: string;
   publicUrl?: string;
+  uploadKey?: string;
 }
 
 export class ApiError extends Error {

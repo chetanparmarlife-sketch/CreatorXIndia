@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -14,6 +15,12 @@ import * as SecureStore from "expo-secure-store";
 import { useMutation } from "@tanstack/react-query";
 import { ScreenHeader } from "../../components/screen-header";
 import { useAuth } from "../../lib/auth";
+import {
+  BIOMETRIC_ENABLED_KEY,
+  authenticateWithBiometric,
+  getBiometricType,
+  isBiometricAvailable,
+} from "../../lib/biometric";
 import { createMobileApiClient } from "../../lib/queryClient";
 
 const ACCESS_TOKEN_KEY = "crx_access_token";
@@ -23,6 +30,52 @@ export default function SecuritySettingsScreen() {
   const api = useMemo(() => createMobileApiClient(), []);
   const { logout } = useAuth();
   const [newEmail, setNewEmail] = useState("");
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [biometricType, setBiometricType] = useState<"face" | "fingerprint" | "none">("none");
+  const [biometricLoading, setBiometricLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBiometricPreference() {
+      setBiometricLoading(true);
+      const [available, type, stored] = await Promise.all([
+        isBiometricAvailable(),
+        getBiometricType(),
+        SecureStore.getItemAsync(BIOMETRIC_ENABLED_KEY),
+      ]);
+
+      if (cancelled) return;
+      setBiometricAvailable(available);
+      setBiometricType(type);
+      setBiometricEnabled(available && stored === "true");
+      setBiometricLoading(false);
+    }
+
+    void loadBiometricPreference();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function setBiometricPreference(enabled: boolean): Promise<void> {
+    if (!biometricAvailable || biometricLoading) return;
+
+    try {
+      if (enabled) {
+        const authenticated = await authenticateWithBiometric();
+        if (!authenticated) return;
+      }
+
+      setBiometricEnabled(enabled);
+      await SecureStore.setItemAsync(BIOMETRIC_ENABLED_KEY, enabled ? "true" : "false");
+    } catch (error) {
+      setBiometricEnabled(!enabled);
+      Alert.alert("Could not update biometric lock", error instanceof Error ? error.message : "Please try again.");
+    }
+  }
 
   const logoutAllMutation = useMutation({
     mutationFn: () => api.creator.logoutAll(),
@@ -55,6 +108,35 @@ export default function SecuritySettingsScreen() {
           ListHeaderComponent={
             <View>
               <View className="rounded-lg border border-zinc-200 bg-white p-4">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-base font-black text-zinc-950">
+                      {biometricType === "face"
+                        ? "FaceID Lock"
+                        : biometricType === "fingerprint"
+                          ? "Fingerprint Lock"
+                          : "Biometric Lock"}
+                    </Text>
+                    {!biometricAvailable && !biometricLoading ? (
+                      <Text testID="text-biometric-unavailable" className="mt-1 text-sm font-bold text-zinc-500">
+                        Not available on this device
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Switch
+                    testID="toggle-biometric"
+                    value={biometricEnabled}
+                    disabled={!biometricAvailable || biometricLoading}
+                    onValueChange={(value) => {
+                      void setBiometricPreference(value);
+                    }}
+                    trackColor={{ false: "#d4d4d8", true: "#a5b4fc" }}
+                    thumbColor={biometricEnabled ? "#4f46e5" : "#f4f4f5"}
+                  />
+                </View>
+              </View>
+
+              <View className="mt-4 rounded-lg border border-zinc-200 bg-white p-4">
                 <TouchableOpacity
                   testID="btn-logout-all-devices"
                   disabled={logoutAllMutation.isPending}

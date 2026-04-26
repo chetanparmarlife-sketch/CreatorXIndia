@@ -19,3 +19,4 @@
 | S15 | 5.4-5.5 | Shell + 5 Tab Screens | 1 day | done |
 | S16 | 6.1-6.3 | Campaign Stack + Chat + Notifications | 1 day | done |
 | S17 | 6.4-6.5 | Withdraw + Settings Screens | 1 day | done |
+| S18 | 7.1-7.4 | Push + Deep Links + Picker + Biometric | 1 day | done |
