@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { FlatList, RefreshControl, Text, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import type { CreatorApplication } from "@creatorx/api-client";
 import { CreatorShell } from "../../components/creator-shell";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { formatINR } from "../../lib/format";
 
 type CampaignFilter = "all" | "applied" | "active" | "completed";
@@ -55,7 +55,7 @@ function CampaignApplicationCard({ item }: { item: CreatorApplication }) {
 }
 
 export default function MyCampaignsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const [activeFilter, setActiveFilter] = useState<CampaignFilter>("all");
   const status = activeFilter === "all" ? undefined : activeFilter;
 

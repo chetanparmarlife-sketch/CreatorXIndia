@@ -163,7 +163,7 @@ export interface Notification {
   body: string;
   readAt: string | null;
   createdAt: string;
-  data?: Record<string, string>;
+  data?: Record<string, unknown>;
 }
 
 export interface DashboardStats {

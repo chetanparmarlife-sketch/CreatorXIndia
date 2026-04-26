@@ -1,11 +1,11 @@
-import { useMemo, type ComponentProps } from "react";
+import { type ComponentProps } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import type { Notification } from "@creatorx/api-client";
 import { useAuth } from "../../lib/auth";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -35,7 +35,7 @@ function NotificationsIcon({ color, size, unreadCount }: { color: string; size: 
 export default function TabsLayout() {
   const { user, isLoading } = useAuth();
   const profileComplete = user?.profileComplete ?? user?.profile_complete;
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
 
   const notificationsQuery = useQuery<Notification[]>({
     queryKey: ["creator", "notifications"],

@@ -2,7 +2,7 @@ import { Platform } from "react-native";
 import { router } from "expo-router";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { createMobileApiClient } from "./queryClient";
+import { apiClient } from "./queryClient";
 
 type NotificationData = Record<string, unknown>;
 
@@ -33,7 +33,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
       projectId: Constants.expoConfig?.extra?.eas?.projectId,
     });
     const token = result.data;
-    await createMobileApiClient().registerPushToken(token, mobilePlatform());
+    await apiClient.registerPushToken(token, mobilePlatform());
     return token;
   } catch (error) {
     console.warn("[notifications] Push registration failed.", error);
@@ -99,7 +99,7 @@ export async function handleNotificationAction(response: Notifications.Notificat
   const data = response.notification.request.content.data as NotificationData;
   const campaignId = stringValue(data, "campaignId") ?? stringValue(data, "campaign_id");
   const threadId = stringValue(data, "threadId") ?? stringValue(data, "thread_id");
-  const api = createMobileApiClient();
+  const api = apiClient;
 
   try {
     if (response.actionIdentifier === "accept" && campaignId) {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   ScrollView,
@@ -10,11 +10,11 @@ import {
 import { Redirect, router } from "expo-router";
 import { INDIAN_NICHES } from "@creatorx/schema";
 import { useAuth } from "../../lib/auth";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 export default function OnboardingScreen() {
   const { user, isLoading } = useAuth();
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
   const [selectedNiches, setSelectedNiches] = useState<string[]>([]);

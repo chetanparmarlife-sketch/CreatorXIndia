@@ -78,6 +78,7 @@ const authResponseSchema = z.object({
 
 const refreshResponseSchema = z.object({
   accessToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
 });
 
 const rawCreatorProfileSchema = z.object({
@@ -358,13 +359,10 @@ const rawTransactionSchema = z.object({
 }).passthrough();
 
 const earningsResponseSchema = z.object({
-  balance_cents: z.number().optional(),
-  availableForWithdrawalPaise: z.number().optional(),
-  totalEarnedPaise: z.number().optional(),
-  pendingPaise: z.number().optional(),
-  upi_id: z.string().nullable().optional(),
+  totalEarnedPaise: z.number(),
+  pendingPaise: z.number(),
+  availableForWithdrawalPaise: z.number(),
   upiId: z.string().nullable().optional(),
-  bank_account: z.string().nullable().optional(),
   bankAccount: z.string().nullable().optional(),
   transactions: z.array(rawTransactionSchema).optional().default([]),
 }).passthrough();
@@ -473,7 +471,7 @@ const uploadPresignResponseSchema = z.object({
   uploadKey: z.string().optional(),
 }).passthrough();
 
-const stringRecordSchema = z.record(z.string());
+const stringRecordSchema = z.record(z.unknown());
 
 const rawNotificationSchema = z.object({
   id: z.string(),
@@ -798,23 +796,13 @@ function mapTransaction(raw: z.infer<typeof rawTransactionSchema>): EarningTrans
 
 function parseEarnings(data: unknown): EarningsSummary {
   const raw = earningsResponseSchema.parse(data);
-  const transactions = raw.transactions.map(mapTransaction);
-  const totalEarnedPaise = raw.totalEarnedPaise
-    ?? transactions
-      .filter((transaction) => transaction.type === "earning" && transaction.status === "completed")
-      .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
-  const pendingPaise = raw.pendingPaise
-    ?? transactions
-      .filter((transaction) => transaction.status === "pending")
-      .reduce((sum, transaction) => sum + Math.abs(transaction.amountPaise), 0);
-
   return {
-    totalEarnedPaise,
-    pendingPaise,
-    availableForWithdrawalPaise: raw.availableForWithdrawalPaise ?? raw.balance_cents ?? 0,
-    upiId: raw.upiId ?? raw.upi_id ?? null,
-    bankAccount: raw.bankAccount ?? raw.bank_account ?? null,
-    transactions,
+    totalEarnedPaise: raw.totalEarnedPaise,
+    pendingPaise: raw.pendingPaise,
+    availableForWithdrawalPaise: raw.availableForWithdrawalPaise,
+    upiId: raw.upiId ?? null,
+    bankAccount: raw.bankAccount ?? null,
+    transactions: raw.transactions.map(mapTransaction),
   };
 }
 
@@ -945,7 +933,7 @@ export function createApiClient(config: ApiClientConfig) {
         return authResponseSchema.parse(await post("/api/auth/verify-otp", body));
       },
 
-      async refresh(refreshToken: string): Promise<{ accessToken: string }> {
+      async refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken?: string }> {
         const body = refreshBodySchema.parse({ refreshToken });
         return refreshResponseSchema.parse(await post("/api/auth/refresh", body));
       },
@@ -1087,6 +1075,10 @@ export function createApiClient(config: ApiClientConfig) {
         await post("/api/creator/change-email", body);
       },
 
+      async verifyEmailChange(otp: string): Promise<void> {
+        await post("/api/creator/verify-email-change", { otp });
+      },
+
       async presignUpload(data: {
         type: "avatar" | "kyc" | "deliverable";
         filename: string;
@@ -1117,14 +1109,14 @@ export function createApiClient(config: ApiClientConfig) {
       await post("/api/push-tokens", { token, platform });
     },
 
-    async uploadToPresignedUrl(uploadUrl: string): Promise<void> {
+    async uploadToPresignedUrl(uploadUrl: string, file: Blob | ArrayBuffer, contentType = "image/jpeg"): Promise<void> {
       const url = z.string().url().parse(uploadUrl);
       const response = await fetch(url, {
         method: "PUT",
         headers: {
-          "Content-Type": "image/jpeg",
+          "Content-Type": contentType,
         },
-        body: "",
+        body: file,
       });
       if (!response.ok) {
         throw new ApiError(response.status, await readErrorMessage(response));

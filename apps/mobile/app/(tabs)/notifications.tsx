@@ -1,16 +1,16 @@
-import { useMemo } from "react";
+
 import { FlatList, RefreshControl, Text, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { Notification } from "@creatorx/api-client";
 import { CreatorShell } from "../../components/creator-shell";
-import { createMobileApiClient, queryClient } from "../../lib/queryClient";
+import { apiClient, queryClient } from "../../lib/queryClient";
 import { relativeTime } from "../../lib/format";
 
 function destinationForNotification(notification: Notification): string | null {
-  const type = notification.data?.type ?? notification.type;
-  const campaignId = notification.data?.campaignId;
-  const threadId = notification.data?.threadId;
+  const type = (notification.data?.type as string | undefined) ?? notification.type;
+  const campaignId = notification.data?.campaignId as string | undefined;
+  const threadId = notification.data?.threadId as string | undefined;
 
   if ((type === "campaign_invite" || type === "application_approved" || type === "deliverable_approved") && campaignId) {
     return `/campaigns/${campaignId}`;
@@ -55,7 +55,7 @@ function NotificationRow({
 }
 
 export default function NotificationsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const notificationsQuery = useQuery<Notification[]>({
     queryKey: ["creator", "notifications"],
     queryFn: () => api.creator.getNotifications(),

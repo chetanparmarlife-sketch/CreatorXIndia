@@ -4,8 +4,8 @@ import { Ionicons } from "@expo/vector-icons";
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
 
 export function formatINR(paise: number): string {
-  const rupees = Math.round(paise / 100);
-  return `₹${rupees.toLocaleString("en-IN")}`;
+  const rupees = paise / 100;
+  return `₹${rupees.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatShortDate(value: string): string {

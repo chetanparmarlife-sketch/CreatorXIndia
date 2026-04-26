@@ -41,7 +41,7 @@ function buildSeedData() {
     kyc_status: "none" as const, pan_number: null, pan_name: null, aadhaar_last4: null,
     gstin: null, kyc_submitted_at: null, kyc_verified_at: null, kyc_rejection_reason: null,
     upi_id: null, bank_account_number: null, bank_ifsc: null, bank_account_holder: null,
-    notif_push: true, notif_email_digest: true, notif_marketing: false,
+    notif_push: true, notif_email_digest: true, notif_marketing: false, pending_email: null,
   };
 
   // ---------- Profiles (Indian creators) ----------
@@ -79,7 +79,7 @@ function buildSeedData() {
     bank_account_holder: "Aarav Mehta",
     notif_push: true,
     notif_email_digest: true,
-    notif_marketing: false,
+    notif_marketing: false, pending_email: null,
   };
 
   const priya: Profile = {
@@ -116,7 +116,7 @@ function buildSeedData() {
     bank_account_holder: null,
     notif_push: true,
     notif_email_digest: true,
-    notif_marketing: false,
+    notif_marketing: false, pending_email: null,
   };
 
   const rohan: Profile = {
@@ -153,7 +153,7 @@ function buildSeedData() {
     bank_account_holder: null,
     notif_push: true,
     notif_email_digest: true,
-    notif_marketing: false,
+    notif_marketing: false, pending_email: null,
   };
 
   const aisha: Profile = {
@@ -693,11 +693,11 @@ function buildSeedData() {
 
   // ---------- Notifications ----------
   const notifications: Notification[] = [
-    { id: "n1", user_id: aarav.id, kind: "application_accepted", title: "OnePlus accepted your application", body: "You're in for the Nord 5 review. Device shipping tomorrow.", link: "/campaigns/c-oneplus-nord", read: false, created_at: daysAgo(2) },
-    { id: "n2", user_id: aarav.id, kind: "new_message", title: "OnePlus sent you a message", body: "Great — device shipping tomorrow.", link: "/inbox/t-aarav-oneplus", read: false, created_at: daysAgo(0.3) },
-    { id: "n3", user_id: aarav.id, kind: "payment_received", title: "₹41,666 credited", body: "CRED Pay deliverable approved — earnings committed.", link: "/earnings", read: true, created_at: daysAgo(0.5) },
-    { id: "n4", user_id: priya.id, kind: "deliverable_feedback", title: "Nykaa requested revision", body: "Zoom in on the foundation texture.", link: "/campaigns/c-nykaa-summer", read: false, created_at: daysAgo(0.5) },
-    { id: "n5", user_id: rohan.id, kind: "system", title: "Complete your KYC", body: "Your PAN is under review — usually 24 hrs.", link: "/settings", read: false, created_at: daysAgo(3) },
+    { id: "n1", user_id: aarav.id, kind: "application_accepted", title: "OnePlus accepted your application", body: "You're in for the Nord 5 review. Device shipping tomorrow.", link: "/campaigns/c-oneplus-nord", data: { type: "application_approved", campaignId: "c-oneplus-nord" }, read: false, created_at: daysAgo(2) },
+    { id: "n2", user_id: aarav.id, kind: "new_message", title: "OnePlus sent you a message", body: "Great — device shipping tomorrow.", link: "/inbox/t-aarav-oneplus", data: { type: "message_received", threadId: "t-aarav-oneplus" }, read: false, created_at: daysAgo(0.3) },
+    { id: "n3", user_id: aarav.id, kind: "payment_received", title: "₹41,666 credited", body: "CRED Pay deliverable approved — earnings committed.", link: "/earnings", data: { type: "payout_processed" }, read: true, created_at: daysAgo(0.5) },
+    { id: "n4", user_id: priya.id, kind: "deliverable_feedback", title: "Nykaa requested revision", body: "Zoom in on the foundation texture.", link: "/campaigns/c-nykaa-summer", data: { type: "deliverable_feedback", campaignId: "c-nykaa-summer" }, read: false, created_at: daysAgo(0.5) },
+    { id: "n5", user_id: rohan.id, kind: "system", title: "Complete your KYC", body: "Your PAN is under review — usually 24 hrs.", link: "/settings", data: { type: "system" }, read: false, created_at: daysAgo(3) },
   ];
 
   const audit_log: AuditLog[] = [

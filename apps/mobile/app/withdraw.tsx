@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,7 +16,7 @@ import { router } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { EarningsSummary } from "@creatorx/api-client";
 import { ScreenHeader } from "../components/screen-header";
-import { createMobileApiClient } from "../lib/queryClient";
+import { apiClient } from "../lib/queryClient";
 import { formatINR } from "../lib/format";
 
 const MIN_WITHDRAWAL_PAISE = 50_000;
@@ -30,13 +30,13 @@ function showToast(message: string) {
 }
 
 function rupeesToPaise(value: string): number {
-  const rupees = Number.parseInt(value.replace(/[^\d]/g, ""), 10);
+  const rupees = Number.parseFloat(value.replace(/[^\d.]/g, ""));
   if (!Number.isFinite(rupees)) return 0;
-  return rupees * 100;
+  return Math.round(rupees * 100);
 }
 
 export default function WithdrawScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("");
 

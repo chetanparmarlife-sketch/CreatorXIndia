@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -14,7 +14,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { INDIAN_NICHES } from "@creatorx/schema";
 import type { Campaign, PaginatedCampaigns } from "@creatorx/api-client";
 import { CreatorShell } from "../../components/creator-shell";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { formatINR, formatShortDate, platformIcon } from "../../lib/format";
 
 function CampaignCard({ campaign }: { campaign: Campaign }) {
@@ -58,7 +58,7 @@ function CampaignCard({ campaign }: { campaign: Campaign }) {
 }
 
 export default function DiscoverScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedNiche, setSelectedNiche] = useState<string | null>(null);

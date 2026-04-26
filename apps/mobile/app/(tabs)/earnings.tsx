@@ -1,10 +1,10 @@
-import { useMemo } from "react";
+
 import { FlatList, RefreshControl, Text, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import type { EarningTransaction, EarningsSummary } from "@creatorx/api-client";
 import { CreatorShell } from "../../components/creator-shell";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { formatINR, formatShortDate } from "../../lib/format";
 
 function TransactionRow({ transaction }: { transaction: EarningTransaction }) {
@@ -28,7 +28,7 @@ function TransactionRow({ transaction }: { transaction: EarningTransaction }) {
 }
 
 export default function EarningsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const earningsQuery = useQuery<EarningsSummary>({
     queryKey: ["creator", "earnings"],
     queryFn: () => api.creator.getEarnings(),

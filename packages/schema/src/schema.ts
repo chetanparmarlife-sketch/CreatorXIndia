@@ -164,6 +164,9 @@ export interface Profile {
   notif_push: boolean;            // real-time push notifications
   notif_email_digest: boolean;    // weekly email of top campaigns
   notif_marketing: boolean;       // promotional emails
+
+  // Pending email change
+  pending_email: string | null;   // email awaiting verification
 }
 
 export interface SocialAccount {
@@ -389,6 +392,7 @@ export interface Notification {
   title: string;
   body: string;
   link: string | null;           // e.g. /campaigns/abc
+  data: Record<string, unknown> | null;  // e.g. { type, campaignId, threadId }
   read: boolean;
   created_at: string;
 }
@@ -535,6 +539,7 @@ export const profiles = pgTable("profiles", {
   notif_push: boolean("notif_push").notNull().default(true),
   notif_email_digest: boolean("notif_email_digest").notNull().default(true),
   notif_marketing: boolean("notif_marketing").notNull().default(false),
+  pending_email: text("pending_email"),
 });
 
 export const social_accounts = pgTable("social_accounts", {
@@ -777,6 +782,7 @@ export const notifications = pgTable("notifications", {
   title: text("title").notNull(),
   body: text("body").notNull(),
   link: text("link"),
+  data: jsonb("data").$type<Record<string, unknown> | null>(),
   read: boolean("read").notNull().default(false),
   created_at: text("created_at").notNull(),
 });

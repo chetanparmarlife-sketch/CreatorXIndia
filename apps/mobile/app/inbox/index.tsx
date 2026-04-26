@@ -1,11 +1,11 @@
-import { useMemo } from "react";
+
 import { ActivityIndicator, FlatList, Image, RefreshControl, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import type { Thread } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { initials, relativeTime } from "../../lib/format";
 
 function ThreadRow({ thread }: { thread: Thread }) {
@@ -53,7 +53,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
 }
 
 export default function CreatorInboxScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const threadsQuery = useQuery<Thread[]>({
     queryKey: ["creator", "threads"],
     queryFn: () => api.creator.getThreads(),

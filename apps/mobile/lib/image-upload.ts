@@ -1,6 +1,6 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import { createMobileApiClient } from "./queryClient";
+import { apiClient } from "./queryClient";
 
 const MAX_IMAGE_DIMENSION = 2000;
 
@@ -75,7 +75,7 @@ export async function pickAndUploadImage(config: PickAndUploadImageConfig): Prom
 
   reportProgress(config, 35);
 
-  const api = createMobileApiClient();
+  const api = apiClient;
   const filename = `${Date.now()}.jpg`;
   const presign = await api.creator.presignUpload({
     type: config.type,

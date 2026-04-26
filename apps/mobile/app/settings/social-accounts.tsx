@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ScreenHeader } from "../../components/screen-header";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 function showToast(message: string) {
   if (Platform.OS === "android") {
@@ -24,7 +24,7 @@ function showToast(message: string) {
 }
 
 export default function SocialAccountsSettingsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const queryClient = useQueryClient();
   const [instagram, setInstagram] = useState("");
   const [youtube, setYoutube] = useState("");

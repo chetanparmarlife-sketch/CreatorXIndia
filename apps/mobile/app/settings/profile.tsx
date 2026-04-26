@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreatorProfile } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
 import { pickAndUploadImage } from "../../lib/image-upload";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 function showToast(message: string) {
   if (Platform.OS === "android") {
@@ -52,7 +52,7 @@ function ToggleChip({
 }
 
 export default function ProfileSettingsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const queryClient = useQueryClient();
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");

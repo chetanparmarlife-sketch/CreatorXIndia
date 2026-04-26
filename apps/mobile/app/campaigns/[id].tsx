@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -20,7 +20,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CampaignDetail } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
 import { pickAndUploadImage } from "../../lib/image-upload";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { formatINR, formatShortDate, platformIcon } from "../../lib/format";
 
 function showToast(message: string) {
@@ -52,7 +52,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function CampaignDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const campaignId = typeof params.id === "string" ? params.id : "";
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const queryClient = useQueryClient();
   const [isApplyOpen, setApplyOpen] = useState(false);
   const [isDeliverableOpen, setDeliverableOpen] = useState(false);

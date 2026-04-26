@@ -12,7 +12,7 @@ export const queryClient = new QueryClient({
       retry: 2,
     },
     mutations: {
-      retry: 2,
+      retry: false,
     },
   },
 });
@@ -23,3 +23,5 @@ export function createMobileApiClient() {
     getToken: () => SecureStore.getItemAsync(ACCESS_TOKEN_KEY),
   });
 }
+
+export const apiClient = createMobileApiClient();

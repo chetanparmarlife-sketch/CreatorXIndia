@@ -23,7 +23,7 @@ import {
   createPayoutRequest, updateCreatorSocialAccounts, updateCreatorUpi,
   updateCreatorBankAccount, createOrUpdateKyc, getCreatorKyc,
   updateCreatorNotificationPreferences, revokeAllRefreshTokens as revokeAllStoredRefreshTokens,
-  createPendingEmailChange, maskBankAccount,
+  createPendingEmailChange, confirmEmailChange, maskBankAccount,
 } from "./storage";
 import {
   INDIAN_NICHES,
@@ -457,8 +457,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!user) {
         return res.status(401).json({ error: "Invalid refresh token" });
       }
+      // Rotate: revoke old, issue new
+      await revokeRefreshToken(refreshToken, userId);
       const accessToken = signAccessToken(user.id, user.role);
-      return res.json({ accessToken });
+      const newRefreshToken = await signRefreshToken(user.id);
+      return res.json({ accessToken, refreshToken: newRefreshToken });
     } catch (error) {
       if (error instanceof AuthError) {
         return res.status(error.status).json({ error: error.message });
@@ -613,6 +616,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/creator/verify-email-change", async (req, res) => {
+    const uid = await requireUser(req, res); if (!uid) return;
+    const { otp } = req.body ?? {};
+    if (typeof otp !== "string" || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ error: "A 6-digit OTP is required" });
+    }
+
+    try {
+      const me = await profiles.byId(uid);
+      if (!me?.pending_email) {
+        return res.status(400).json({ error: "No pending email change" });
+      }
+      await verifyOtp(me.pending_email, otp);
+      await confirmEmailChange(uid);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
   app.get("/api/creator/home-stats", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
     return res.json(await getCreatorHomeStats(uid));
@@ -739,16 +765,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/creator/earnings", async (req, res) => {
     const uid = await requireUser(req, res); if (!uid) return;
     const me = await profiles.byId(uid);
+    const balancePaise = await transactions.balanceCents(uid);
+    const txRows = await transactions.forUser(uid);
+    const earningTxs = txRows.filter((t) => t.kind === "earning" && t.status === "completed");
+    const pendingTxs = txRows.filter((t) => t.status === "pending");
+    const totalEarnedPaise = earningTxs.reduce((sum, t) => sum + t.amount_cents, 0);
+    const pendingPaise = pendingTxs.reduce((sum, t) => sum + Math.abs(t.amount_cents), 0);
     return res.json({
-      balance_cents: await transactions.balanceCents(uid),
-      transactions: await transactions.forUser(uid),
-      withdrawals: await withdrawals.list({ user_id: uid }),
-      kyc_status: me?.kyc_status,
-      has_upi: !!me?.upi_id,
-      has_bank: !!(me?.bank_account_number && me?.bank_ifsc),
-      upi_id: me?.upi_id ?? null,
-      bank_account: maskBankAccount(me?.bank_account_number),
-      fy_earned_cents: me?.fy_earned_cents || 0,
+      totalEarnedPaise,
+      pendingPaise,
+      availableForWithdrawalPaise: balancePaise,
+      upiId: me?.upi_id ?? null,
+      bankAccount: maskBankAccount(me?.bank_account_number),
+      transactions: txRows.map((t) => ({
+        id: t.id,
+        amountPaise: t.amount_cents,
+        type: t.kind,
+        description: t.description,
+        status: t.status,
+        createdAt: t.created_at,
+      })),
     });
   });
 

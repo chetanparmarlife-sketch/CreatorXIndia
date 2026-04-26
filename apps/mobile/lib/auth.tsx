@@ -3,12 +3,12 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
+
   useState,
   type ReactNode,
 } from "react";
 import * as SecureStore from "expo-secure-store";
-import { createMobileApiClient, queryClient } from "./queryClient";
+import { apiClient, createMobileApiClient, queryClient } from "./queryClient";
 
 const ACCESS_TOKEN_KEY = "crx_access_token";
 const REFRESH_TOKEN_KEY = "crx_refresh_token";
@@ -17,7 +17,6 @@ export interface AuthUser {
   id: string;
   role: string;
   email: string;
-  profile_complete?: boolean;
   profileComplete?: boolean;
 }
 
@@ -102,8 +101,7 @@ function decodeAccessToken(token: string, fallbackEmail = ""): AuthUser | null {
       id,
       role,
       email: stringProp(parsed, "email") ?? fallbackEmail,
-      ...(profileComplete !== undefined ? { profileComplete } : {}),
-      ...(profileCompleteSnake !== undefined ? { profile_complete: profileCompleteSnake } : {}),
+      profileComplete: profileComplete ?? profileCompleteSnake ?? undefined,
     };
   } catch {
     return null;
@@ -129,7 +127,6 @@ async function hydrateUser(api: MobileApiClient, accessToken: string, fallbackEm
         ...decoded,
         email: profile.email,
         profileComplete: profile.profileComplete,
-        profile_complete: profile.profileComplete,
       };
     }
 
@@ -148,7 +145,7 @@ async function hydrateUser(api: MobileApiClient, accessToken: string, fallbackEm
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -193,9 +190,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const { accessToken } = await api.auth.refresh(refreshToken);
-        await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, accessToken);
-        const nextUser = await hydrateUser(api, accessToken);
+        const result = await api.auth.refresh(refreshToken);
+        await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, result.accessToken);
+        if (result.refreshToken) {
+          await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, result.refreshToken);
+        }
+        const nextUser = await hydrateUser(api, result.accessToken);
         if (!nextUser) throw new Error("Invalid access token");
         if (!cancelled) setUser(nextUser);
       } catch {

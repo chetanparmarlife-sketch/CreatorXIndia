@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -21,15 +21,16 @@ import {
   getBiometricType,
   isBiometricAvailable,
 } from "../../lib/biometric";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 const ACCESS_TOKEN_KEY = "crx_access_token";
 const REFRESH_TOKEN_KEY = "crx_refresh_token";
 
 export default function SecuritySettingsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const { logout } = useAuth();
   const [newEmail, setNewEmail] = useState("");
+  const [emailChangeOtp, setEmailChangeOtp] = useState("");
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricType, setBiometricType] = useState<"face" | "fingerprint" | "none">("none");
@@ -92,8 +93,18 @@ export default function SecuritySettingsScreen() {
 
   const changeEmailMutation = useMutation({
     mutationFn: () => api.creator.changeEmail(newEmail.trim()),
-    onSuccess: () => Alert.alert("Check your inbox", "We sent an OTP to your new email."),
+    onSuccess: () => Alert.alert("Check your new email", "We sent an OTP to your new email address. Enter it below to confirm the change."),
     onError: (error) => Alert.alert("Could not change email", error instanceof Error ? error.message : "Please try again."),
+  });
+
+  const verifyEmailChangeMutation = useMutation({
+    mutationFn: () => api.creator.verifyEmailChange(emailChangeOtp.trim()),
+    onSuccess: () => {
+      Alert.alert("Email updated", "Your email has been changed successfully.");
+      setNewEmail("");
+      setEmailChangeOtp("");
+    },
+    onError: (error) => Alert.alert("Could not verify OTP", error instanceof Error ? error.message : "Please try again."),
   });
 
   return (
@@ -174,9 +185,39 @@ export default function SecuritySettingsScreen() {
                   {changeEmailMutation.isPending ? (
                     <ActivityIndicator color="#ffffff" />
                   ) : (
-                    <Text className="text-sm font-black text-white">Change email</Text>
+                    <Text className="text-sm font-black text-white">Send verification code</Text>
                   )}
                 </TouchableOpacity>
+
+                {changeEmailMutation.isSuccess ? (
+                  <View className="mt-4">
+                    <Text className="mb-2 text-xs font-bold uppercase text-zinc-500">Verification code</Text>
+                    <TextInput
+                      testID="input-email-change-otp"
+                      value={emailChangeOtp}
+                      onChangeText={(value) => setEmailChangeOtp(value.replace(/\D/g, "").slice(0, 6))}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      placeholder="123456"
+                      placeholderTextColor="#a1a1aa"
+                      className="h-14 rounded-lg border border-zinc-300 bg-white px-4 text-center text-xl font-bold tracking-widest text-zinc-950"
+                    />
+                    <TouchableOpacity
+                      testID="btn-verify-email-change"
+                      disabled={verifyEmailChangeMutation.isPending || emailChangeOtp.length !== 6}
+                      onPress={() => verifyEmailChangeMutation.mutate()}
+                      className={`mt-4 h-12 items-center justify-center rounded-lg ${
+                        emailChangeOtp.length === 6 ? "bg-emerald-600" : "bg-zinc-300"
+                      }`}
+                    >
+                      {verifyEmailChangeMutation.isPending ? (
+                        <ActivityIndicator color="#ffffff" />
+                      ) : (
+                        <Text className="text-sm font-black text-white">Verify and update email</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
               </View>
             </View>
           }

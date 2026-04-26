@@ -902,8 +902,30 @@ export async function revokeAllRefreshTokens(userId: string): Promise<void> {
 
 export async function createPendingEmailChange(creatorId: string, newEmail: string): Promise<void> {
   await ensureSeeded();
+  const normalized = newEmail.trim().toLowerCase();
+  await db
+    .update(profilesTable)
+    .set({ pending_email: normalized })
+    .where(eq(profilesTable.id, creatorId));
   await writeAudit(creatorId, "create_pending_email_change", "profile", creatorId, {
-    newEmail: newEmail.trim().toLowerCase(),
+    newEmail: normalized,
+  });
+}
+
+export async function confirmEmailChange(creatorId: string): Promise<void> {
+  await ensureSeeded();
+  const profile = await profiles.byId(creatorId);
+  if (!profile || !profile.pending_email) {
+    throw new Error("No pending email change");
+  }
+  const newEmail = profile.pending_email;
+  await db
+    .update(profilesTable)
+    .set({ email: newEmail, pending_email: null })
+    .where(eq(profilesTable.id, creatorId));
+  await writeAudit(creatorId, "confirm_email_change", "profile", creatorId, {
+    oldEmail: profile.email,
+    newEmail,
   });
 }
 
@@ -2693,6 +2715,11 @@ export async function getCreatorThreadMessages(
       ),
     );
 
+  await db
+    .update(messageThreadsTable)
+    .set({ unread_count: 0 })
+    .where(and(eq(messageThreadsTable.id, threadId), eq(messageThreadsTable.creator_id, creatorId)));
+
   const messageRows = await db.select().from(messagesTable).where(eq(messagesTable.thread_id, threadId));
   return {
     thread: await creatorThreadSummary(thread),
@@ -2905,6 +2932,7 @@ export const profiles = {
       notif_push: true,
       notif_email_digest: true,
       notif_marketing: false,
+      pending_email: null,
     };
     await db.insert(profilesTable).values(row);
     await writeAudit(row.id, "create_profile", "profile", row.id, row);
@@ -2990,6 +3018,7 @@ export const profiles = {
       title: "KYC submitted",
       body: "We're reviewing your PAN. Usually verified within 24 hours.",
       link: "/settings",
+      data: { type: "system" },
     });
 
     return { ok: true, profile: updated };
@@ -3010,6 +3039,7 @@ export const profiles = {
         title: "KYC verified ✓",
         body: "You can now apply to KYC-required campaigns and withdraw funds.",
         link: "/settings",
+        data: { type: "kyc_verified" },
       });
     } else {
       await notifications.push(userId, {
@@ -3017,6 +3047,7 @@ export const profiles = {
         title: "KYC needs attention",
         body: updated.kyc_rejection_reason || "Please re-submit with correct details",
         link: "/settings",
+        data: { type: "kyc_rejected" },
       });
     }
 
@@ -3082,6 +3113,7 @@ export const profiles = {
       title: `${s.platform} handle verified`,
       body: `${s.handle} is now verified.`,
       link: "/settings",
+      data: { type: "handle_verified" },
     });
 
     return s;
@@ -3649,6 +3681,7 @@ export const applications = {
         title: "Application accepted",
         body: `You're in for ${c?.title || "the campaign"}.`,
         link: `/campaigns/${a.campaign_id}`,
+        data: { type: "application_approved", campaignId: a.campaign_id },
       });
 
       await sendPushToUser(a.creator_id, {
@@ -3663,6 +3696,7 @@ export const applications = {
         title: "Application update",
         body: "Unfortunately, your application wasn't selected this time.",
         link: `/campaigns/${a.campaign_id}`,
+        data: { type: "application_rejected", campaignId: a.campaign_id },
       });
     }
 
@@ -3810,6 +3844,7 @@ export const deliverables = {
         title: "Deliverable approved",
         body: `"${d.kind}" approved. ${formatted} credited to your wallet.`,
         link: "/earnings",
+        data: { type: "deliverable_approved", campaignId: d.campaign_id },
       });
 
       await sendPushToUser(d.creator_id, {
@@ -3825,6 +3860,7 @@ export const deliverables = {
         title: "Revision requested",
         body: feedback.slice(0, 120),
         link: `/campaigns/${d.campaign_id}`,
+        data: { type: "deliverable_feedback", campaignId: d.campaign_id },
       });
     }
 
@@ -4230,6 +4266,7 @@ export const withdrawals = {
         title: "Withdrawal paid",
         body: `${formatted} sent via ${updated.method.toUpperCase()} to ${updated.destination}. UTR: ${updated.utr}`,
         link: "/earnings",
+        data: { type: "payout_processed", payoutId: updated.id },
       });
 
       await sendPushToUser(updated.user_id, {

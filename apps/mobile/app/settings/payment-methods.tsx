@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { EarningsSummary } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 function showToast(message: string) {
   if (Platform.OS === "android") {
@@ -26,7 +26,7 @@ function showToast(message: string) {
 }
 
 export default function PaymentMethodsSettingsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const queryClient = useQueryClient();
   const [upiId, setUpiId] = useState("");
   const [savedUpiId, setSavedUpiId] = useState<string | null>(null);

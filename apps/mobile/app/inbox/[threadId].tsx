@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -14,7 +14,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Message, Thread } from "@creatorx/api-client";
 import { ScreenHeader } from "../../components/screen-header";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { relativeTime } from "../../lib/format";
 
 type ThreadMessagesData = { thread: Thread; messages: Message[] };
@@ -36,7 +36,7 @@ function MessageBubble({ message }: { message: Message }) {
 export default function CreatorThreadScreen() {
   const params = useLocalSearchParams<{ threadId?: string }>();
   const threadId = typeof params.threadId === "string" ? params.threadId : "";
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const queryClient = useQueryClient();
   const [body, setBody] = useState("");
 

@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Alert, FlatList, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useMutation } from "@tanstack/react-query";
 import { ScreenHeader } from "../../components/screen-header";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 
 const OPTIONS = [
   { key: "campaign_invite", label: "New campaign invite", testID: "toggle-campaign-invite" },
@@ -24,7 +24,7 @@ const DEFAULT_PREFERENCES: Record<PreferenceKey, boolean> = {
 };
 
 export default function NotificationSettingsScreen() {
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
   const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean>>(DEFAULT_PREFERENCES);
 
   const saveMutation = useMutation({

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+
 import {
   ActivityIndicator,
   FlatList,
@@ -14,7 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Campaign, HomeStats, Notification } from "@creatorx/api-client";
 import { CreatorShell } from "../../components/creator-shell";
 import { useAuth } from "../../lib/auth";
-import { createMobileApiClient } from "../../lib/queryClient";
+import { apiClient } from "../../lib/queryClient";
 import { formatINR, formatShortDate, greetingForNow, initials, relativeTime } from "../../lib/format";
 
 function StatCard({ label, value, testID }: { label: string; value: string; testID: string }) {
@@ -69,7 +69,7 @@ function NotificationPreview({ notification }: { notification: Notification }) {
 
 export default function HomeScreen() {
   const { user } = useAuth();
-  const api = useMemo(() => createMobileApiClient(), []);
+  const api = apiClient;
 
   const profileQuery = useQuery({
     queryKey: ["creator", "profile"],
