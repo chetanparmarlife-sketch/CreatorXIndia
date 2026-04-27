@@ -21,25 +21,35 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+const allowedOrigins = new Set([
+  'https://creator-x-sandy.vercel.app',
+  'https://creatorx-pearl.vercel.app',
+  'https://creator-x-india-schema.vercel.app',
+  'https://app.creator-x.club',
+  'https://brand.creator-x.club',
+  'https://admin.creator-x.club',
+  'https://staging.creator-x.club',
+  'https://creator-web.vercel.app',
+  'https://brand-web.vercel.app',
+  'https://admin-web.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+]);
+
+const splitAppPreviewOriginPattern =
+  /^https:\/\/(?:creator(?:x|-x|-web)?|brand(?:-web)?|admin(?:-web)?)(?:-[a-z0-9-]+)?\.vercel\.app$/i;
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  return allowedOrigins.has(origin) || splitAppPreviewOriginPattern.test(origin);
+}
+
 export async function createApp() {
   const app = express();
   const httpServer = createServer(app);
 
   app.use(cors({
-    origin: [
-      'https://creator-x-sandy.vercel.app',
-      'https://creatorx-pearl.vercel.app', 
-      'https://creator-x-india-schema.vercel.app',
-      'https://app.creator-x.club',
-      'https://brand.creator-x.club',
-      'https://admin.creator-x.club',
-      'https://staging.creator-x.club',
-      'https://creator-web.vercel.app',
-      'https://brand-web.vercel.app',
-      'https://admin-web.vercel.app',
-      'http://localhost:5173',
-      'http://localhost:3000',
-    ],
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
